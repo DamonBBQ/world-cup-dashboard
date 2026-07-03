@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { mockMatches, stageLabels } from '../data/mockMatches';
-import { fetchLocalMatches, convertMatchToFrontend, type StandardMatch } from '../services/localData';
+import { useState, useMemo } from 'react';
+import { useLiveScores } from '../hooks/useLiveScores';
+import { formatLastUpdated, getDataSourceColor, getDataSourceLabel } from '../hooks/useLiveScores';
 
 interface DisplayMatch {
   id: string;
@@ -27,50 +27,68 @@ interface DisplayMatch {
   competitionCode?: string;
 }
 
+/**
+ * 将 API 返回的 StandardMatch 转换为组件需要的 DisplayMatch
+ */
+function convertToDisplayMatch(match: any): DisplayMatch {
+  return {
+    id: match.id,
+    date: match.date,
+    time: match.time,
+    homeTeam: match.homeTeam.name,
+    awayTeam: match.awayTeam.name,
+    homeFlag: match.homeTeam.flag,
+    awayFlag: match.awayTeam.flag,
+    status: match.status === 'NOT_STARTED' ? 'upcoming' : match.status === 'LIVE' ? 'live' : 'finished',
+    stage: 'group',
+    homeScore: match.homeScore ?? undefined,
+    awayScore: match.awayScore ?? undefined,
+    winProb: match.probabilities.homeWin,
+    drawProb: match.probabilities.draw,
+    loseProb: match.probabilities.awayWin,
+    confidence: Math.round(Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin) * 0.9),
+    riskLevel: match.riskLevel === '低风险' ? 'low' : match.riskLevel === '中风险' ? 'medium' : 'high',
+    recommendedPick: match.probabilities.homeWin >= 45 ? '主胜' : match.probabilities.awayWin >= 45 ? '客胜' : '平局',
+    possibleScores: ['1-0', '2-1', '1-1'],
+    overUnder: 'neutral',
+    keyFactors: [
+      `胜率 ${(Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin))}%`,
+      match.status === 'LIVE' ? `第 ${match.elapsed} 分钟` : '未开始',
+    ],
+    analysis: match.status === 'LIVE' 
+      ? `比赛进行中，当前 ${match.homeScore}-${match.awayScore}`
+      : `预测：${match.homeTeam.name} 胜率 ${match.probabilities.homeWin}%`,
+  };
+}
+
 export default function PredictionInsight() {
-  const [matches, setMatches] = useState<DisplayMatch[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [dataSource, setDataSource] = useState<'live' | 'mock'>('live');
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-
-  const loadMatches = useCallback(async () => {
-    setLoading(true);
-    try {
-      const localMatches: StandardMatch[] = await fetchLocalMatches('WC');
-      if (localMatches.length === 0) {
-        setMatches(mockMatches as DisplayMatch[]);
-        setDataSource('mock');
-      } else {
-        const converted = localMatches.map(convertMatchToFrontend) as DisplayMatch[];
-        setMatches(converted);
-        setDataSource('live');
-      }
-      setLastUpdate(new Date());
-    } catch {
-      setMatches(mockMatches as DisplayMatch[]);
-      setDataSource('mock');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadMatches();
-  }, [loadMatches]);
-
+  // 获取今天和明天的日期
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  
+  // 使用实时数据 Hook
+  const { matches, loading, error, dataSource, lastUpdated, refetch } = useLiveScores({
+    date: today,
+    autoRefresh: true,
+  });
+  
+  // 转换为 DisplayMatch
+  const displayMatches = matches.map(convertToDisplayMatch);
+  
   // 过滤掉对阵未确定的比赛
-  const validMatches = matches.filter(m => m.homeTeam && m.homeTeam !== 'None' && m.awayTeam && m.awayTeam !== 'None');
-
+  const validMatches = displayMatches.filter(m => m.homeTeam && m.homeTeam !== 'None' && m.awayTeam && m.awayTeam !== 'None');
+  
   // 优先展示未开始和进行中的比赛，按时间排序
   const featuredMatches = validMatches
     .filter(m => m.status !== 'finished')
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-
+  
   // 如果未开始的不够，补充已结束的
-  const displayMatches = featuredMatches.length >= 4
-    ? featuredMatches.slice(0, 8)
-    : [...featuredMatches, ...validMatches.filter(m => m.status === 'finished').slice(0, 8 - featuredMatches.length)];
-
+  const displayCount = 8;
+  const showMatches = featuredMatches.length >= 4
+    ? featuredMatches.slice(0, displayCount)
+    : [...featuredMatches, ...validMatches.filter(m => m.status === 'finished').slice(0, displayCount - featuredMatches.length)];
+  
   const getProbabilityBar = (win: number, draw: number, lose: number) => {
     const total = win + draw + lose;
     if (total === 0) return null;
@@ -82,25 +100,7 @@ export default function PredictionInsight() {
       </div>
     );
   };
-
-  const getOverUnderBadge = (ou: string) => {
-    const styles: Record<string, string> = {
-      over: 'bg-blue-100 text-blue-700',
-      under: 'bg-purple-100 text-purple-700',
-      neutral: 'bg-gray-100 text-gray-700',
-    };
-    const labels: Record<string, string> = {
-      over: '大球倾向',
-      under: '小球倾向',
-      neutral: '大小均衡',
-    };
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[ou] || styles.neutral}`}>
-        {labels[ou] || labels.neutral}
-      </span>
-    );
-  };
-
+  
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
       upcoming: 'bg-blue-100 text-blue-700',
@@ -118,157 +118,133 @@ export default function PredictionInsight() {
       </span>
     );
   };
-
+  
+  const getOverUnderBadge = (ou: string) => {
+    const styles: Record<string, string> = {
+      over: 'bg-blue-100 text-blue-700',
+      under: 'bg-purple-100 text-purple-700',
+      neutral: 'bg-gray-100 text-gray-700',
+    };
+    const labels: Record<string, string> = {
+      over: '大球倾向',
+      under: '小球倾向',
+      neutral: '大小均衡',
+    };
+    return (
+      <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[ou] || styles.neutral}`}>
+        {labels[ou] || labels.neutral}
+      </span>
+    );
+  };
+  
   return (
-    <section id="prediction" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+    <section id="predictions" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-2">
-          <h2 className="text-2xl sm:text-3xl font-bold text-primary">预测与策略洞察</h2>
-          {dataSource === 'live' && (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              实时数据
-            </span>
-          )}
-          {dataSource === 'mock' && (
-            <span className="px-2.5 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
-              模拟数据
-            </span>
-          )}
+          <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-indigo-100">
+            <span className="text-xl">🧠</span>
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-green-900">预测与策略洞察</h2>
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <span>数据来源：</span>
+              <span className={`font-medium ${getDataSourceColor(dataSource)}`}>
+                {getDataSourceLabel(dataSource)}
+              </span>
+              {dataSource === 'mock' && (
+                <span className="text-yellow-600 text-xs">（非实时数据）</span>
+              )}
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
+          <span>最后更新：{formatLastUpdated(lastUpdated)}</span>
           <button
-            onClick={loadMatches}
+            onClick={refetch}
             disabled={loading}
-            className="ml-auto px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-bg/50 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            className="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 text-xs"
           >
-            <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
             {loading ? '刷新中...' : '刷新'}
           </button>
         </div>
-        <p className="text-text-secondary">
-          基于多维数据的比赛预测与策略建议
-          {lastUpdate && (
-            <span className="ml-2 text-xs text-text-secondary/60">
-              · 最后更新: {lastUpdate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          )}
-        </p>
+        
+        {error && (
+          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
+            数据更新失败：{error}。已保留上一次成功数据。
+          </div>
+        )}
       </div>
-
-      {loading && displayMatches.length === 0 && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="inline-block w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin mb-3" />
-          <div className="text-text-secondary">加载预测数据...</div>
+      
+      {loading && showMatches.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+          <p>加载中...</p>
         </div>
-      )}
-
-      {displayMatches.length === 0 && !loading && (
-        <div className="bg-card border border-border rounded-2xl p-12 text-center">
-          <div className="text-4xl mb-3">📊</div>
-          <div className="text-text-secondary">暂无可预测的比赛数据</div>
-          <div className="text-xs mt-1 text-text-secondary/60">请先运行同步脚本获取最新比赛数据</div>
-        </div>
-      )}
-
-      <div className="space-y-4">
-        {displayMatches.map(match => (
-          <div key={match.id} className="bg-card rounded-2xl border border-border p-4 sm:p-6">
-            <div className="flex flex-col lg:flex-row gap-6">
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-4 flex-wrap">
-                  {match.homeFlag?.startsWith('http') ? (
-                    <img src={match.homeFlag} alt="" className="w-7 h-7 object-contain" />
-                  ) : (
-                    <span className="text-2xl">{match.homeFlag}</span>
-                  )}
-                  <span className="font-bold text-lg">{match.homeTeam}</span>
-                  <span className="text-text-secondary">vs</span>
-                  <span className="font-bold text-lg">{match.awayTeam}</span>
-                  {match.awayFlag?.startsWith('http') ? (
-                    <img src={match.awayFlag} alt="" className="w-7 h-7 object-contain" />
-                  ) : (
-                    <span className="text-2xl">{match.awayFlag}</span>
-                  )}
+      ) : (
+        <div className="grid gap-6">
+          {showMatches.map(match => (
+            <div key={match.id} className="bg-white rounded-2xl shadow hover:shadow-md transition p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
                   {getStatusBadge(match.status)}
-                  <span className="text-xs text-text-secondary">
-                    {match.date} {match.time}
-                    {match.stage && ` · ${stageLabels[match.stage] || match.stage}`}
-                  </span>
+                  <span className="text-sm text-gray-500">{match.time}</span>
                 </div>
-
-                {(match.status === 'live' || match.status === 'finished') && match.homeScore !== undefined && (
-                  <div className="mb-3 text-2xl font-bold text-primary">
-                    {match.homeScore} - {match.awayScore}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <div className="text-xs text-text-secondary mb-1">胜/平/负概率</div>
-                    {getProbabilityBar(match.winProb, match.drawProb, match.loseProb)}
-                    <div className="flex gap-3 mt-1 text-xs text-text-secondary">
-                      <span>胜 {match.winProb}%</span>
-                      <span>平 {match.drawProb}%</span>
-                      <span>负 {match.loseProb}%</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-xs text-text-secondary mb-1">推荐方向</div>
-                    <div className="font-medium text-sm text-primary">{match.recommendedPick}</div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {match.keyFactors.map((factor, i) => (
-                    <span key={i} className="px-2 py-1 bg-bg rounded-lg text-xs text-text-secondary">
-                      {factor}
-                    </span>
-                  ))}
-                  <span className="px-2 py-1 rounded-lg text-xs">
-                    {getOverUnderBadge(match.overUnder)}
-                  </span>
-                </div>
-
-                {match.analysis && (
-                  <div className="text-sm text-text-secondary leading-relaxed">
-                    {match.analysis}
-                  </div>
-                )}
-
-                {match.possibleScores.length > 0 && (
-                  <div className="flex gap-2 mt-3">
-                    {match.possibleScores.map((score, i) => (
-                      <span key={i} className="px-3 py-1 bg-primary/10 text-primary rounded-lg text-sm font-medium">
-                        {score}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                {getOverUnderBadge(match.overUnder)}
               </div>
-
-              <div className="lg:w-32 flex lg:flex-col items-center justify-center gap-2 bg-bg/50 rounded-xl p-4">
-                <div className="text-3xl font-bold text-primary">{match.confidence}</div>
-                <div className="text-xs text-text-secondary text-center">模型信心分</div>
-                <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${
-                      match.confidence >= 75 ? 'bg-green-500' : match.confidence >= 60 ? 'bg-yellow-500' : 'bg-red-500'
-                    }`}
-                    style={{ width: `${match.confidence}%` }}
-                  />
+              
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex-1 text-center">
+                  <div className="font-semibold text-green-900">{match.homeTeam}</div>
                 </div>
+                
+                <div className="px-6 text-center">
+                  {match.status === 'live' ? (
+                    <div className="text-2xl font-bold text-red-600">
+                      {match.homeScore} - {match.awayScore}
+                    </div>
+                  ) : match.status === 'finished' ? (
+                    <div className="text-2xl font-bold text-gray-900">
+                      {match.homeScore} - {match.awayScore}
+                    </div>
+                  ) : (
+                    <div className="text-lg text-gray-400">vs</div>
+                  )}
+                </div>
+                
+                <div className="flex-1 text-center">
+                  <div className="font-semibold text-green-900">{match.awayTeam}</div>
+                </div>
+              </div>
+              
+              <div className="mb-4">
+                <div className="flex items-center justify-between text-sm mb-1">
+                  <span className="text-gray-600">胜平负概率</span>
+                </div>
+                {getProbabilityBar(match.winProb, match.drawProb, match.loseProb)}
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>主胜 {match.winProb}%</span>
+                  <span>平局 {match.drawProb}%</span>
+                  <span>客胜 {match.loseProb}%</span>
+                </div>
+              </div>
+              
+              <div className="text-sm text-gray-600">
+                {match.analysis}
               </div>
             </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3 text-xs text-text-secondary text-center">
-        数据来源: {dataSource === 'live' ? 'football-data.org (脚本同步)' : '本地模拟数据'}
-        · 仅供分析参考，不构成投注建议
-      </div>
+          ))}
+          
+          {showMatches.length === 0 && !loading && (
+            <div className="text-center py-12 text-gray-400">
+              <p>暂无比赛数据</p>
+              {dataSource === 'mock' && (
+                <p className="text-sm mt-2">当前使用模拟数据，请配置 API Key 以获取实时数据</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
