@@ -1,0 +1,12 @@
+{
+  "min_observation_tickets": 10,
+  "min_absorption_tickets": 30,
+  "min_roi": 0,
+  "max_drawdown_limit": -0.30,
+  "max_single_ticket_exposure": 0.25,
+  "min_holdout_window_months": 12,
+  "allow_absorb_small_sample_profit": false,
+  "require_positive_final_bankroll": true,
+  "require_drawdown_recovery": true,
+  "notes": "小样本高收益只能观察，不能正式吸收。正式吸收必须同时满足样本数、盈利、最大回撤和留出验证。"
+}

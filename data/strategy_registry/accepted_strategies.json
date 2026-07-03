@@ -1,0 +1,71 @@
+{
+  "accepted": [
+    {
+      "strategy_name": "意甲单独_只节奏_EV≥8%_仓位4%_球差≥0.15",
+      "league_scope": "Italian Serie A",
+      "ticket_type": "只节奏票，即大小2.5二串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 731.62,
+      "net_profit": 231.62,
+      "roi": 0.194,
+      "max_drawdown": -0.2987,
+      "ticket_count": 55,
+      "hit_rate": 0.2727,
+      "absorption_status": "accepted",
+      "absorbed_at": "2026-07-02",
+      "holdout_passed": true,
+      "reason": "满足盈利、样本数和最大回撤三项条件",
+      "risk_notes": [
+        "最大回撤接近底线，后续需要继续观察",
+        "不能扩大本金，只能进入低仓位策略库",
+        "未来样本回撤超过阈值时自动降仓"
+      ]
+    },
+    {
+      "strategy_name": "德甲单独_节奏票_仓位4%_EV≥8%",
+      "league_scope": "Bundesliga",
+      "ticket_type": "大小2.5二串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 521.0,
+      "net_profit": 21.0,
+      "roi": 0.021,
+      "max_drawdown": -0.189,
+      "ticket_count": 34,
+      "hit_rate": 0.2353,
+      "absorption_status": "accepted",
+      "absorbed_at": "2026-07-02",
+      "holdout_passed": true,
+      "reason": "满足盈利、样本数和最大回撤三项条件",
+      "risk_notes": [
+        "不能扩大本金，只能进入低仓位策略库",
+        "未来样本回撤超过阈值时自动降仓"
+      ]
+    },
+    {
+      "strategy_name": "意甲单独_方向票二串一_仓位3%_EV≥8%",
+      "league_scope": "Italian Serie A",
+      "ticket_type": "胜平负二串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 508.0,
+      "net_profit": 8.0,
+      "roi": 0.008,
+      "max_drawdown": -0.162,
+      "ticket_count": 36,
+      "hit_rate": 0.2222,
+      "absorption_status": "accepted",
+      "absorbed_at": "2026-07-02",
+      "holdout_passed": true,
+      "reason": "满足盈利、样本数和最大回撤三项条件",
+      "risk_notes": [
+        "不能扩大本金，只能进入低仓位策略库",
+        "未来样本回撤超过阈值时自动降仓"
+      ]
+    }
+  ],
+  "metadata": {
+    "last_updated": "2026-07-03",
+    "total_accepted": 3,
+    "total_observed": 3,
+    "total_rejected": 2
+  }
+}

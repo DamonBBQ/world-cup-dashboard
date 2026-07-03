@@ -1,0 +1,40 @@
+{
+  "rule_id": "goal_center_protection_external_v1",
+  "name": "三档中心保护层",
+  "status": "external_reference",
+  "source_type": "external_summary",
+  "scope": "total_goals",
+  "external_evidence": [
+    {
+      "test_ratio": "30%",
+      "total_matches": 4653,
+      "filtered_matches": 2750,
+      "hit_rate": 0.8091
+    },
+    {
+      "test_ratio": "40%",
+      "total_matches": 6204,
+      "filtered_matches": 2482,
+      "hit_rate": 0.8348
+    }
+  ],
+  "local_validation": {
+    "enabled": true,
+    "local_sample_count": 0,
+    "local_hit_count": 0,
+    "local_hit_rate": null,
+    "status": "not_enough_local_data"
+  },
+  "usage_rules": [
+    "用于总进球区间生成",
+    "不作为盈利保证",
+    "不自动加仓",
+    "只影响主区间、低位保护、高位保护的选择",
+    "后续通过本地复盘逐步验证"
+  ],
+  "risk_notes": [
+    "本项目没有原始大样本数据，不能声明独立验证通过",
+    "仅作为外部参考启发式",
+    "若本地复盘样本不足，不得升级为正式吸收规则"
+  ]
+}

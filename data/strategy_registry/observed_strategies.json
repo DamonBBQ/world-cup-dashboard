@@ -1,0 +1,62 @@
+{
+  "observed": [
+    {
+      "strategy_name": "意甲单独_只节奏_EV≥8%_仓位6%_球差≥0.15",
+      "league_scope": "Italian Serie A",
+      "ticket_type": "只节奏票，即大小2.5二串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 892.4,
+      "net_profit": 392.4,
+      "roi": 0.392,
+      "max_drawdown": -0.423,
+      "ticket_count": 52,
+      "hit_rate": 0.2885,
+      "absorption_status": "observed",
+      "reason": "ROI为39.2%但最大回撤-42.3%超过-30%底线",
+      "risk_notes": [
+        "回撤过大",
+        "不允许进入正式策略库"
+      ]
+    },
+    {
+      "strategy_name": "法甲+意甲混合_节奏票_仓位5%_EV≥10%",
+      "league_scope": "Ligue 1 + Serie A",
+      "ticket_type": "大小2.5二串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 612.3,
+      "net_profit": 112.3,
+      "roi": 0.112,
+      "max_drawdown": -0.3812,
+      "ticket_count": 41,
+      "hit_rate": 0.2439,
+      "absorption_status": "observed",
+      "reason": "ROI为11.2%但最大回撤-38.1%超过-30%底线",
+      "risk_notes": [
+        "回撤过大",
+        "不允许进入正式策略库"
+      ]
+    },
+    {
+      "strategy_name": "西甲单独_方向票三串一_仓位3%_EV≥12%",
+      "league_scope": "La Liga",
+      "ticket_type": "胜平负三串一",
+      "initial_bankroll": 500.0,
+      "final_bankroll": 548.0,
+      "net_profit": 48.0,
+      "roi": 0.048,
+      "max_drawdown": -0.2541,
+      "ticket_count": 9,
+      "hit_rate": 0.2222,
+      "absorption_status": "observed",
+      "reason": "仅9张票，小样本只能观察不能吸收",
+      "risk_notes": [
+        "样本不足",
+        "需继续积累出票数据"
+      ]
+    }
+  ],
+  "metadata": {
+    "last_updated": "2026-07-03",
+    "total_observed": 3
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "source": "football-data.org",
+  "subscription": "Free",
+  "success": true,
+  "error": null,
+  "lastSync": "2026-07-03T01:51:01.074161+00:00",
+  "lastSyncLocal": "2026-07-03 09:51:01",
+  "availableCompetitions": [
+    "WC",
+    "CL",
+    "BL1",
+    "DED",
+    "BSA",
+    "PD",
+    "FL1",
+    "ELC",
+    "PPL",
+    "EC",
+    "SA",
+    "PL"
+  ],
+  "competitionNames": {
+    "WC": "FIFA World Cup",
+    "CL": "UEFA Champions League",
+    "BL1": "Bundesliga",
+    "DED": "Eredivisie",
+    "BSA": "Campeonato Brasileiro Série A",
+    "PD": "Primera Division (La Liga)",
+    "FL1": "Ligue 1",
+    "ELC": "Championship",
+    "PPL": "Primeira Liga",
+    "EC": "European Championship",
+    "SA": "Serie A",
+    "PL": "Premier League"
+  },
+  "syncResults": [
+    {
+      "competition": "WC",
+      "name": "FIFA World Cup",
+      "matchCount": 104,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "CL",
+      "name": "UEFA Champions League",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "BL1",
+      "name": "Bundesliga",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "DED",
+      "name": "Eredivisie",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "BSA",
+      "name": "Campeonato Brasileiro Série A",
+      "matchCount": 32,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "PD",
+      "name": "Primera Division (La Liga)",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "FL1",
+      "name": "Ligue 1",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "ELC",
+      "name": "Championship",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "PPL",
+      "name": "Primeira Liga",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "EC",
+      "name": "European Championship",
+      "matchCount": 0,
+      "status": "success",
+      "error": null
+    },
+    {
+      "competition": "SA",
+      "name": "Serie A",
+      "matchCount": 0,
+      "status": "failed",
+      "error": "429: 请求频率限制，请稍后再试"
+    },
+    {
+      "competition": "PL",
+      "name": "Premier League",
+      "matchCount": 0,
+      "status": "failed",
+      "error": "429: 请求频率限制，请稍后再试"
+    }
+  ],
+  "totalCompetitions": 12,
+  "successCount": 10,
+  "failedCount": 2,
+  "totalMatches": 136
+}

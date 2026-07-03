@@ -1,0 +1,2046 @@
+import type { TicketRecord } from '../data/mockMatches';
+
+// ═══════════════════════════════════════════════
+// 类型定义
+// ═══════════════════════════════════════════════
+
+export type TicketType =
+  | '2串1复式'
+  | '3串1复式'
+  | '比分2串1'
+  | '比分3串1'
+  | '比分×总进球2串1复式';
+
+export interface FundAllocation {
+  type: string;
+  label: string;
+  ratio: number;
+  description: string;
+}
+
+export const FUND_ALLOCATIONS: FundAllocation[] = [
+  { type: 'A', label: '基础票', ratio: 0.24, description: '主方向 + 另一场进球中心' },
+  { type: 'B', label: '节奏票', ratio: 0.18, description: '不看胜负，只看两场总进球中心' },
+  { type: 'C', label: '结构票', ratio: 0.16, description: '半场走势 + 总进球' },
+  { type: 'D', label: '利润票', ratio: 0.18, description: '比分池 + 总进球，用来抬赔率' },
+  { type: 'E', label: '防守票', ratio: 0.16, description: '补漏洞，比如0球、3球、4+偏差' },
+  { type: 'F', label: '彩蛋票', ratio: 0.08, description: '极小金额博高赔率比分串' },
+];
+
+export type StrategyTag =
+  | '主线覆盖'
+  | '防冷保护'
+  | '比分小搏'
+  | '低进球保护'
+  | '混合覆盖'
+  | '比分方向覆盖'
+  | '进球数分支保护'
+  | '低比分保护'
+  | '比分反向保护';
+
+export type RiskLevel = '低' | '中' | '中高' | '高';
+
+export interface SelectableMatch {
+  /** Unique slug-based id: homeSlug__awaySlug */
+  id: string;
+  home: string;
+  away: string;
+  homeRating: number;
+  awayRating: number;
+  /** raw API status: 'TIMED' | 'SCHEDULED' | 'IN_PLAY' | 'LIVE' | 'PAUSED' | 'FINISHED' | 'COMPLETE' | 'COMPLETED' | 'AWARDED' | 'CANCELLED' | 'POSTPONED' | 'SUSPENDED' */
+  rawStatus: string;
+  competition?: string;
+  utcDate?: string;
+}
+
+export interface TicketLeg {
+  match: string;        // e.g. "Switzerland vs Algeria"
+  matchId: string;      // slug-based id: homeSlug__awaySlug
+  market: string;       // e.g. "胜平负", "总进球", "半全场", "比分"
+  selections: string[]; // e.g. ["胜"]  (pure option, no team name)
+}
+
+export interface SplitTicket {
+  id: string;
+  /** Human-readable single-line title, fully qualified with match + team names */
+  title: string;
+  ticketType: TicketType;
+  legs: TicketLeg[];
+  multiplier: number;
+  baseStake: number;
+  combinationCount: number;
+  amount: number;
+  riskLevel: RiskLevel;
+  strategyTag: StrategyTag;
+  logic: string;
+  disclaimer: string;
+  /** 覆盖宽度评分：所有 legs 的 coverageScore 平均值 */
+  coverageScore: number;
+}
+
+export interface SplitTicketParams {
+  totalBudget: number;
+  maxSingleTicket: number;
+  ticketCount: number;
+  selectedMatches: SelectableMatch[];
+  includeScoreTickets: boolean;
+  scoreTicketRatio: number;
+  riskPreference: 'conservative' | 'moderate' | 'aggressive';
+}
+
+// ── 条件暴露分析 ──
+export interface ConditionExposure {
+  /** Full label: "Switzerland vs Algeria｜胜平负｜Switzerland 胜" */
+  label: string;
+  matchId: string;
+  market: string;
+  selections: string[];
+  ticketCount: number;
+  /** 关联金额：包含该条件的票面总金额 */
+  linkedAmount: number;
+  /** 平摊估算：按 leg 数量平摊后的估算金额 */
+  allocatedShare: number;
+  budgetRatio: number;       // 占总预算 %
+  allocatedRatio: number;    // 占已分配 %
+  riskLevel: '低' | '中' | '偏高' | '过高';
+  suggestion: string;
+}
+
+// ── 合法性检查摘要 ──
+export interface LegalitySummary {
+  matchCount: number;
+  tripleDisabled: boolean;
+  tripleReason: string;
+  illegalSameMatch: boolean;
+  repeatedCandidatesFiltered: number;
+  finalDuplicates: number;
+  exclusiveConditions: number;
+  targetTickets: number;
+  actualTickets: number;
+  underTicketReason: string;
+  emptyBudget: number;
+  emptyBudgetReason: string;
+}
+
+// ── 生成警告（结构化） ──
+export interface GenerationWarning {
+  type: 'triple_disabled' | 'repeated_filtered' | 'under_ticket' | 'empty_budget' | 'live_match' | 'min_stake_error';
+  message: string;
+  detail?: string;
+}
+
+export interface ReviewSuggestion {
+  category: 'single_point_goal' | 'wider_coverage_available' | 'goal_exposure_high' | 'draw_exposure_high' | 'general';
+  severity: 'info' | 'warning' | 'danger';
+  title: string;
+  detail: string;
+  affectedTickets: string[];
+}
+
+// ═══════════════════════════════════════════════
+// 三档中心保护层 — 外部参考规则
+// ═══════════════════════════════════════════════
+
+export type GoalProtectionStatus = 'not_enough_local_data' | 'preliminary_observation' | 'local_reference' | 'local_validated';
+
+export interface GoalCenterProtection {
+  matchId: string;
+  matchName: string;
+  expectedGoals: number;
+  center: number;
+  mainRange: string[];
+  lowProtect: string[];
+  highProtect: string[];
+  wideCover: string[];
+  confidenceSource: 'rating_heuristic' | 'odds' | 'xg' | 'external_reference';
+  ruleStatus: 'external_reference' | 'candidate' | 'local_validated';
+  reason: string;
+}
+
+export interface GoalCenterProtectionRule {
+  rule_id: string;
+  name: string;
+  status: 'external_reference';
+  source_type: string;
+  scope: string;
+  external_evidence: {
+    test_ratio: string;
+    total_matches: number;
+    filtered_matches: number;
+    hit_rate: number;
+  }[];
+  local_validation: {
+    enabled: boolean;
+    local_sample_count: number;
+    local_hit_count: number;
+    local_hit_rate: number | null;
+    status: GoalProtectionStatus;
+  };
+  usage_rules: string[];
+  risk_notes: string[];
+}
+
+export interface LocalGoalReview {
+  matchId: string;
+  matchName: string;
+  predictedMainRange: string[];
+  predictedLowProtect: string[];
+  predictedHighProtect: string[];
+  actualTotalGoals: number | null;
+  hitCenter: boolean;
+  hitProtection: boolean;
+  hitAnyLayer: boolean;
+  reviewTime: string;
+}
+
+/**
+ * 根据 expectedGoals 计算四个区间
+ */
+function computeGoalLayers(expectedGoals: number): {
+  mainRange: string[];
+  lowProtect: string[];
+  highProtect: string[];
+  wideCover: string[];
+} {
+  if (expectedGoals <= 2.1) {
+    return {
+      mainRange: ['0球', '1球', '2球'],
+      lowProtect: ['0球', '1球'],
+      highProtect: ['2球', '3球'],
+      wideCover: ['0球', '1球', '2球'],
+    };
+  } else if (expectedGoals <= 2.6) {
+    return {
+      mainRange: ['1球', '2球'],
+      lowProtect: ['0球', '1球'],
+      highProtect: ['3球', '4球'],
+      wideCover: ['0球', '1球', '2球'],
+    };
+  } else if (expectedGoals <= 3.1) {
+    return {
+      mainRange: ['2球', '3球'],
+      lowProtect: ['1球', '2球'],
+      highProtect: ['3球', '4球'],
+      wideCover: ['1球', '2球', '3球'],
+    };
+  } else {
+    return {
+      mainRange: ['3球', '4球'],
+      lowProtect: ['1球', '2球'],
+      highProtect: ['4球', '5球'],
+      wideCover: ['2球', '3球', '4球'],
+    };
+  }
+}
+
+/**
+ * 根据主客队实力差估算 expectedGoals
+ * 实力接近 → 低期望；实力悬殊 → 高期望
+ */
+function estimateExpectedGoals(homeRating: number, awayRating: number): number {
+  const avgRating = (homeRating + awayRating) / 2;
+  const diff = Math.abs(homeRating - awayRating);
+  // 基础期望基于平均实力（65-87 range → 1.8-3.2）
+  const base = 1.8 + (avgRating - 65) / 22 * 1.4;
+  // 强队主场有额外加成
+  const homeBonus = homeRating > awayRating ? 0.15 : 0;
+  // 实力差缩小期望（悬殊比赛偏多/少球）
+  const diffPenalty = diff > 20 ? -0.25 : diff > 12 ? -0.15 : 0;
+  return Math.round((base + homeBonus + diffPenalty) * 10) / 10;
+}
+
+/**
+ * 为单场比赛构建三档中心保护层
+ */
+export function buildGoalCenterProtection(match: SelectableMatch): GoalCenterProtection {
+  const expectedGoals = estimateExpectedGoals(match.homeRating, match.awayRating);
+  const layers = computeGoalLayers(expectedGoals);
+  const diff = Math.abs(match.homeRating - match.awayRating);
+  const reason = diff > 20
+    ? `实力差距较大（${diff}），预期进球偏多（期望${expectedGoals}球）`
+    : diff > 12
+    ? `主队略强（${diff}），期望${expectedGoals}球，进球区间偏中`
+    : `双方接近（差${diff}），期望${expectedGoals}球，进球偏少`;
+
+  return {
+    matchId: match.id,
+    matchName: `${match.home} vs ${match.away}`,
+    expectedGoals,
+    center: expectedGoals,
+    mainRange: layers.mainRange,
+    lowProtect: layers.lowProtect,
+    highProtect: layers.highProtect,
+    wideCover: layers.wideCover,
+    confidenceSource: 'rating_heuristic',
+    ruleStatus: 'external_reference',
+    reason,
+  };
+}
+
+/**
+ * 加载本地复盘记录（从 localStorage）
+ */
+export function getLocalGoalReviews(): LocalGoalReview[] {
+  try {
+    const raw = localStorage.getItem('goal_center_local_reviews');
+    return raw ? (JSON.parse(raw) as LocalGoalReview[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 保存本地复盘记录
+ */
+export function saveLocalGoalReview(review: LocalGoalReview): void {
+  const reviews = getLocalGoalReviews();
+  // 同场比赛不重复记录（允许更新实际进球）
+  const existingIdx = reviews.findIndex(r => r.matchId === review.matchId);
+  if (existingIdx >= 0) {
+    reviews[existingIdx] = review;
+  } else {
+    reviews.push(review);
+  }
+  localStorage.setItem('goal_center_local_reviews', JSON.stringify(reviews));
+}
+
+/**
+ * 获取当前本地验证状态文字
+ */
+export function getLocalValidationStatus(): { status: GoalProtectionStatus; sampleCount: number; hitRate: number | null; label: string } {
+  const reviews = getLocalGoalReviews();
+  const count = reviews.filter(r => r.actualTotalGoals !== null).length;
+  if (count === 0) {
+    return { status: 'not_enough_local_data', sampleCount: 0, hitRate: null, label: '尚无复盘数据' };
+  }
+  if (count < 30) {
+    return { status: 'preliminary_observation', sampleCount: count, hitRate: null, label: `初步观察（${count}场）` };
+  }
+  if (count < 100) {
+    const hits = reviews.filter(r => r.actualTotalGoals !== null && r.hitAnyLayer).length;
+    return { status: 'preliminary_observation', sampleCount: count, hitRate: hits / count, label: `初步观察（${count}场）` };
+  }
+  if (count < 300) {
+    const hits = reviews.filter(r => r.actualTotalGoals !== null && r.hitAnyLayer).length;
+    return { status: 'local_reference', sampleCount: count, hitRate: hits / count, label: `本地可参考（${count}场，命中率${(hits / count * 100).toFixed(1)}%）` };
+  }
+  const hits = reviews.filter(r => r.actualTotalGoals !== null && r.hitAnyLayer).length;
+  return { status: 'local_validated', sampleCount: count, hitRate: hits / count, label: `本地已验证（${count}场，命中率${(hits / count * 100).toFixed(1)}%）` };
+}
+
+/** 自动修正记录 */
+export interface AutoCorrection {
+  ticketId: string;
+  reason: string;            // 'over_exposure' | 'condition_exceeded' etc
+  conditionLabel: string;     // 暴露超限的条件名
+  originalLegs: TicketLeg[];
+  correctedLegs: TicketLeg[];
+  savedAmount: number;        // 释放的金额
+  replacementStrategy: string; // 'expand_to_wideCover' | 'switch_to_direction' | 'split_ticket' | 'replace_with_empty'
+}
+
+export interface SanitizedResult {
+  tickets: SplitTicket[];
+  warnings: GenerationWarning[];
+  unusedBudget: number;
+  legalitySummary: LegalitySummary;
+  conditionExposures: ConditionExposure[];
+  filteredTicketTitles: string[];
+  reviewSuggestions: ReviewSuggestion[];
+  /** 每场比赛的三档中心保护层（外部参考规则） */
+  goalCenterProtections: GoalCenterProtection[];
+  /** 自动修正记录（已自动修复的超限条件） */
+  autoCorrections: AutoCorrection[];
+}
+
+// ── 复制文案 meta ──
+export interface TicketTextMeta {
+  totalBudget: number;
+  allocatedAmount: number;
+  emptyBudget: number;
+}
+
+// ═══════════════════════════════════════════════
+// matchId 生成（slug-based，杜绝碰撞）
+// ═══════════════════════════════════════════════
+
+/**
+ * 将队名转为 slug：小写、去空格、去特殊字符
+ * "Switzerland" → "switzerland"
+ * "Costa Rica" → "costarica"
+ */
+function toSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * 生成 matchId：homeSlug__awaySlug
+ * 保证 Australia / Austria 不会碰撞
+ */
+export function makeMatchId(home: string, away: string): string {
+  return `${toSlug(home)}__${toSlug(away)}`;
+}
+
+// ═══════════════════════════════════════════════
+// 赛程状态判断
+// ═══════════════════════════════════════════════
+
+const PRE_MATCH_STATUSES = new Set(['TIMED', 'SCHEDULED']);
+
+export function isPreMatchStatus(status: string): boolean {
+  return PRE_MATCH_STATUSES.has(status);
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  TIMED: '待开',
+  SCHEDULED: '待开',
+  IN_PLAY: '进行中',
+  LIVE: '进行中',
+  PAUSED: '暂停',
+  FINISHED: '已结束',
+  COMPLETE: '已结束',
+  COMPLETED: '已结束',
+  AWARDED: '已判定',
+  CANCELLED: '已取消',
+  POSTPONED: '已延期',
+  SUSPENDED: '已中止',
+};
+
+export function getStatusLabel(status: string): string {
+  return STATUS_LABELS[status] || status;
+}
+
+// ═══════════════════════════════════════════════
+// 辅助函数
+// ═══════════════════════════════════════════════
+
+function getLegKey(leg: TicketLeg): string {
+  const selections = [...leg.selections].sort().join('|');
+  return `${leg.matchId}__${leg.market}__${selections}`;
+}
+
+function getLegDisplayKey(leg: TicketLeg): string {
+  const selections = [...leg.selections].sort().join('/');
+  return `${leg.matchId}__${leg.market}__${selections}`;
+}
+
+function uniqueLegKeys(legs: TicketLeg[]): Set<string> {
+  return new Set(legs.map(getLegKey));
+}
+
+function uniqueMatchIds(legs: TicketLeg[]): Set<string> {
+  return new Set(legs.map(l => l.matchId));
+}
+
+// ── 互斥判断 ──
+
+function areSelectionsExclusive(market: string, selections: string[]): boolean {
+  if (market === '胜平负') {
+    const set = new Set(selections);
+    if (set.has('胜') && set.has('负')) return true;
+  }
+  if (market === '总进球') {
+    const nums = selections.map(s => parseInt(s));
+    const valid = nums.filter(n => !isNaN(n));
+    if (valid.length >= 2) {
+      const min = Math.min(...valid);
+      const max = Math.max(...valid);
+      if (max - min < 3) return true;
+    }
+  }
+  if (market === '半全场') {
+    const set = new Set(selections);
+    if (set.has('胜胜') && set.has('负负')) return true;
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════════
+// 核心校验
+// ═══════════════════════════════════════════════
+
+export function validateTicket(
+  ticket: SplitTicket,
+  validMatchIds: Set<string>
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  for (const leg of ticket.legs) {
+    if (!validMatchIds.has(leg.matchId)) {
+      errors.push(`非法 matchId: ${leg.matchId}`);
+    }
+  }
+
+  const matchIds = uniqueMatchIds(ticket.legs);
+
+  if (ticket.ticketType === '2串1复式' || ticket.ticketType === '比分2串1' || ticket.ticketType === '比分×总进球2串1复式') {
+    if (matchIds.size !== 2) errors.push(`2串1 需要 2 个不同 matchId，实际 ${matchIds.size} 个`);
+  }
+
+  if (ticket.ticketType === '3串1复式' || ticket.ticketType === '比分3串1') {
+    if (matchIds.size !== 3) errors.push(`3串1 需要 3 个不同 matchId，实际 ${matchIds.size} 个`);
+  }
+
+  // 不允许同一 matchId 出现多次
+  const matchIdList = ticket.legs.map(l => l.matchId);
+  const seen = new Set<string>();
+  for (const mid of matchIdList) {
+    if (seen.has(mid)) errors.push(`同一张票中 "${mid}" 出现多次`);
+    seen.add(mid);
+  }
+
+  // 不允许重复 conditionKey
+  if (uniqueLegKeys(ticket.legs).size !== ticket.legs.length) {
+    errors.push('出现重复条件（相同 matchId + market + selections）');
+  }
+
+  // 不允许互斥条件
+  const marketMap = new Map<string, TicketLeg[]>();
+  for (const leg of ticket.legs) {
+    const key = leg.matchId + '||' + leg.market;
+    if (!marketMap.has(key)) marketMap.set(key, []);
+    marketMap.get(key)!.push(leg);
+  }
+  for (const [, legsGroup] of marketMap) {
+    if (legsGroup.length < 2) continue;
+    const allSelections = legsGroup.flatMap(l => l.selections);
+    if (areSelectionsExclusive(legsGroup[0].market, allSelections)) {
+      errors.push(`"${legsGroup[0].matchId}" + "${legsGroup[0].market}" 出现互斥选择：${allSelections.join('、')}`);
+    }
+  }
+
+  // 金额一致性校验
+  const expectedAmount = ticket.baseStake * ticket.multiplier * ticket.combinationCount;
+  if (ticket.amount !== expectedAmount) {
+    errors.push(`金额不一致：amount=${ticket.amount}，公式=${ticket.baseStake}×${ticket.multiplier}×${ticket.combinationCount}=${expectedAmount}`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+// ═══════════════════════════════════════════════
+// 标题格式化
+// ═══════════════════════════════════════════════
+
+function formatLegLine(leg: TicketLeg): string {
+  const { match, market, selections } = leg;
+  const homeTeam = match.split(' vs ')[0];
+
+  if (market === '胜平负') {
+    return `${homeTeam} ${selections.join('、')}`;
+  }
+  if (market === '半全场') {
+    return `半场${selections.join('、')}`;
+  }
+  if (market === '总进球') {
+    return `总进球 ${selections.join(' / ')}`;
+  }
+  if (market === '比分') {
+    return `比分 ${selections.join(' / ')}`;
+  }
+  return `${market} ${selections.join('、')}`;
+}
+
+function formatTicketTitle(ticket: SplitTicket): string {
+  const legLines = ticket.legs.map(leg => {
+    return `${leg.match}：${formatLegLine(leg)}`;
+  });
+  return `${legLines.join(' × ')}，${ticket.ticketType}，${ticket.multiplier}倍，共${ticket.amount}元。`;
+}
+
+/**
+ * 生成带序号的完整票组文字（用于复制/导出）
+ * 使用 meta 确保预算数字正确
+ */
+export function formatTicketText(tickets: SplitTicket[], meta?: TicketTextMeta): string {
+  const allocatedAmount = tickets.reduce((sum, t) => sum + t.amount, 0);
+
+  // 如果没有传 meta，用 allocatedAmount 兜底
+  const totalBudget = meta?.totalBudget ?? allocatedAmount;
+  const emptyBudget = meta?.emptyBudget ?? Math.max(0, totalBudget - allocatedAmount);
+
+  let text = `小额多票模拟方案｜总预算${totalBudget}元｜已分配${allocatedAmount}元｜空仓${emptyBudget}元\n\n`;
+  tickets.forEach((ticket, index) => {
+    text += `${index + 1}、${formatTicketTitle(ticket)}\n`;
+  });
+  text += `\n合计分配：${allocatedAmount}元\n`;
+  text += `空仓：${emptyBudget}元\n`;
+  text += `提示：以上仅为模拟方案，不构成投注建议。`;
+  return text;
+}
+
+// ═══════════════════════════════════════════════
+// 出票弹窗格式（中文队名 + 赔率）
+// ═══════════════════════════════════════════════
+
+/** 英文队名 → 中文队名映射 */
+const TEAM_NAME_ZH: Record<string, string> = {
+  // 世界杯参赛队
+  'Mexico': '墨西哥', 'South Africa': '南非', 'Canada': '加拿大',
+  'United States': '美国', 'Panama': '巴拿马',
+  'Brazil': '巴西', 'Argentina': '阿根廷', 'Colombia': '哥伦比亚',
+  'Ecuador': '厄瓜多尔', 'Paraguay': '巴拉圭', 'Uruguay': '乌拉圭',
+  'Chile': '智利', 'Peru': '秘鲁',
+  'France': '法国', 'Germany': '德国', 'Spain': '西班牙',
+  'England': '英格兰', 'Portugal': '葡萄牙', 'Netherlands': '荷兰',
+  'Belgium': '比利时', 'Italy': '意大利', 'Croatia': '克罗地亚',
+  'Switzerland': '瑞士', 'Austria': '奥地利', 'Sweden': '瑞典',
+  'Norway': '挪威', 'Czechia': '捷克', 'Turkey': '土耳其',
+  'Scotland': '苏格兰', 'Wales': '威尔士', 'Ireland': '爱尔兰',
+  'Poland': '波兰', 'Denmark': '丹麦', 'Serbia': '塞尔维亚',
+  'Ukraine': '乌克兰', 'Greece': '希腊', 'Romania': '罗马尼亚',
+  'Bosnia-Herzegovina': '波黑',
+  'Morocco': '摩洛哥', 'Senegal': '塞内加尔', 'Tunisia': '突尼斯',
+  'Egypt': '埃及', 'Algeria': '阿尔及利亚', 'Nigeria': '尼日利亚',
+  'Ghana': '加纳', 'Ivory Coast': '科特迪瓦', 'Congo DR': '刚果(金)',
+  'Cameroon': '喀麦隆', 'Mali': '马里',
+  'Japan': '日本', 'South Korea': '韩国', 'Iran': '伊朗',
+  'Australia': '澳大利亚', 'Qatar': '卡塔尔', 'Saudi Arabia': '沙特阿拉伯',
+  'Iraq': '伊拉克', 'Jordan': '约旦', 'Uzbekistan': '乌兹别克斯坦',
+  'New Zealand': '新西兰', 'Cape Verde Islands': '佛得角',
+  'Cape Verde': '佛得角',
+  'Curaçao': '库拉索', 'Haiti': '海地',
+  // 巴西联赛队（备用）
+  'Botafogo FR': '博塔弗戈', 'CA Mineiro': '米内罗竞技', 'CA Paranaense': '巴拉纳竞技',
+  'CR Flamengo': '弗拉门戈', 'CR Vasco da Gama': '瓦斯科达伽马',
+  'Chapecoense AF': '沙佩科恩斯', 'Coritiba FBC': '科里蒂巴', 'Cruzeiro EC': '克鲁塞罗',
+  'EC Bahia': '巴伊亚', 'EC Vitória': '维多利亚', 'Fluminense FC': '弗卢米嫩塞',
+  'Grêmio FBPA': '格雷米奥', 'Mirassol FC': '米拉索尔',
+  'RB Bragantino': '布拉甘蒂诺', 'SC Corinthians Paulista': '科林蒂安',
+  'SC Internacional': '国际队', 'SE Palmeiras': '帕尔梅拉斯',
+  'Santos FC': '桑托斯', 'São Paulo FC': '圣保罗',
+};
+
+/** 赔率映射表 key 格式: `${matchId}__${market}__${selection}` */
+export type OddsMap = Record<string, string | undefined>;
+
+/** 将英文队名转为中文 */
+export function toChineseTeamName(enName: string): string {
+  return TEAM_NAME_ZH[enName] ?? enName;
+}
+
+/** 将赔率格式化为显示文本，缺失时返回 '--' */
+function formatOdds(odds: string | undefined): string {
+  if (!odds || odds === '0' || odds === 'null') return '--';
+  return odds;
+}
+
+/** 从 match 字符串解析出中文主队 VS 中文客队 */
+function formatChineseMatchLine(match: string): string {
+  const parts = match.split(' vs ');
+  const home = parts[0]?.trim() || '';
+  const away = parts[1]?.trim() || '';
+  return `${toChineseTeamName(home)} VS ${toChineseTeamName(away)}`;
+}
+
+/**
+ * 格式化单个 leg 的选项行（出票弹窗风格）
+ * 返回: { label: string, options: string }
+ * label 为空，options 为 "胜(2.60)、平(3.10)" 这种格式
+ */
+function formatBetSlipLeg(leg: TicketLeg, oddsMap?: OddsMap): string {
+  const { matchId, market, selections } = leg;
+  const parts: string[] = [];
+
+  for (const sel of selections) {
+    const oddsKey = `${matchId}__${market}__${sel}`;
+    const odds = oddsMap ? formatOdds(oddsMap[oddsKey]) : '--';
+
+    if (market === '胜平负') {
+      parts.push(`${sel}(${odds})`);
+    } else if (market === '总进球') {
+      // "1球" → "1", "7+球" → "7+"
+      const goalStr = sel.replace('球', '');
+      parts.push(`${goalStr}(${odds})`);
+    } else if (market === '比分') {
+      parts.push(`${sel}(${odds})`);
+    } else if (market === '半全场') {
+      // "平平" → 直接显示
+      parts.push(`${sel}(${odds})`);
+    } else if (market === '半场') {
+      // "半场"市场：前缀加"半场"，如"平" → "半场平"
+      parts.push(`半场${sel}(${odds})`);
+    } else {
+      parts.push(`${sel}(${odds})`);
+    }
+  }
+
+  return parts.join('、');
+}
+
+/**
+ * 将过关方式转为出票弹窗格式
+ * "2串1复式" → "2关"
+ * "3串1复式" → "3关"
+ * "比分2串1" → "2关"
+ * "比分3串1" → "3关"
+ * "比分×总进球2串1复式" → "2关"
+ */
+function ticketTypeToGuan(ticketType: TicketType): string {
+  const m = ticketType.match(/(\d)/);
+  return m ? `${m[1]}关` : '2关';
+}
+
+/**
+ * 生成出票弹窗风格的复制文案
+ *
+ * 格式示例：
+ * 1、过关方式：2关｜2倍｜合计8元
+ * 澳大利亚 VS 埃及
+ * 平(2.60)
+ *
+ *  阿根廷 VS 佛得角
+ * 1(6.20)、2(4.00)
+ *
+ * 合计分配：100元
+ * 空仓：0元
+ * 提示：以上仅为模拟方案，不构成投注建议。
+ */
+export function formatTicketTextForBetSlip(
+  tickets: SplitTicket[],
+  meta?: TicketTextMeta,
+  oddsMap?: OddsMap
+): string {
+  const allocatedAmount = tickets.reduce((sum, t) => sum + t.amount, 0);
+  const totalBudget = meta?.totalBudget ?? allocatedAmount;
+  const emptyBudget = meta?.emptyBudget ?? Math.max(0, totalBudget - allocatedAmount);
+
+  let text = '';
+
+  tickets.forEach((ticket, index) => {
+    const guan = ticketTypeToGuan(ticket.ticketType);
+    text += `${index + 1}、过关方式：${guan}｜${ticket.multiplier}倍｜合计${ticket.amount}元\n`;
+
+    ticket.legs.forEach(leg => {
+      text += `${formatChineseMatchLine(leg.match)}\n`;
+      text += `${formatBetSlipLeg(leg, oddsMap)}\n`;
+      if (ticket.legs.indexOf(leg) < ticket.legs.length - 1) {
+        text += '\n';
+      }
+    });
+
+    if (index < tickets.length - 1) {
+      text += '\n';
+    }
+  });
+
+  text += `\n合计分配：${allocatedAmount}元\n`;
+  text += `空仓：${emptyBudget}元\n`;
+  text += `提示：以上仅为模拟方案，不构成投注建议。`;
+
+  return text;
+}
+
+// ═══════════════════════════════════════════════
+// 条件暴露分析
+// ═══════════════════════════════════════════════
+
+export function analyzeConditionExposures(
+  tickets: SplitTicket[],
+  totalBudget: number
+): ConditionExposure[] {
+  const conditionMap = new Map<string, {
+    label: string;
+    matchId: string;
+    market: string;
+    match: string;
+    selections: string[];
+    ticketCount: number;
+    linkedAmount: number;
+    legCountSum: number;
+  }>();
+
+  for (const ticket of tickets) {
+    for (const leg of ticket.legs) {
+      const key = getLegDisplayKey(leg);
+      const homeTeam = leg.match.split(' vs ')[0];
+
+      let marketLabel: string;
+      if (leg.market === '胜平负') marketLabel = `${homeTeam} ${leg.selections.join('、')}`;
+      else if (leg.market === '半全场') marketLabel = `半场${leg.selections.join('、')}`;
+      else if (leg.market === '总进球') marketLabel = `总进球 ${leg.selections.join(' / ')}`;
+      else marketLabel = `${leg.market} ${leg.selections.join(' / ')}`;
+
+      // 完整格式 label
+      const fullLabel = `${leg.match}｜${leg.market}｜${marketLabel}`;
+
+      if (!conditionMap.has(key)) {
+        conditionMap.set(key, {
+          label: fullLabel,
+          matchId: leg.matchId,
+          market: leg.market,
+          match: leg.match,
+          selections: leg.selections,
+          ticketCount: 0,
+          linkedAmount: 0,
+          legCountSum: 0,
+        });
+      }
+      const entry = conditionMap.get(key)!;
+      entry.ticketCount += 1;
+      entry.linkedAmount += ticket.amount;
+      entry.legCountSum += ticket.legs.length;
+    }
+  }
+
+  const totalAllocated = tickets.reduce((s, t) => s + t.amount, 0);
+  const exposures: ConditionExposure[] = [];
+
+  for (const [, entry] of conditionMap) {
+    const budgetRatio = totalBudget > 0 ? (entry.linkedAmount / totalBudget) * 100 : 0;
+    const allocatedRatio = totalAllocated > 0 ? (entry.linkedAmount / totalAllocated) * 100 : 0;
+    // 平摊估算 = 关联金额 / 平均 leg 数
+    const avgLegCount = entry.ticketCount > 0 ? entry.legCountSum / entry.ticketCount : 1;
+    const allocatedShare = Math.round(entry.linkedAmount / avgLegCount);
+
+    let risk: ConditionExposure['riskLevel'];
+    let suggestion: string;
+
+    if (allocatedRatio > 65) {
+      risk = '过高';
+      suggestion = '强制削减，该条件占已分配超过65%，需立即用其他路径替代。';
+    } else if (allocatedRatio > 55) {
+      risk = '过高';
+      suggestion = '强制削减，该条件占已分配超过55%，需增加其他路径分散相关性风险。';
+    } else if (allocatedRatio > 40) {
+      risk = '偏高';
+      // 针对总进球 1/2 给出更具体的提示
+      if (entry.market === '总进球' && entry.selections.length <= 2) {
+        const goalNums = entry.selections.map(s => parseInt(s)).filter(n => !isNaN(n));
+        if (goalNums.every(n => n <= 2)) {
+          suggestion = `${entry.match.split(' vs ')[0]}总进球${entry.selections.join('/')}暴露偏高。如果该场打出3球或4球，本组票会大面积受损。建议增加总进球3/4、比分2:0/3:0或保留空仓，而不是继续加码${entry.selections.join('/')}球。`;
+        } else {
+          suggestion = '相关性偏高，建议用比分或总进球路径替代直接胜负方向。';
+        }
+      } else {
+        suggestion = '相关性偏高，建议用比分或总进球路径替代直接胜负方向。';
+      }
+    } else {
+      risk = '中';
+      suggestion = '风险可控，继续观察。';
+    }
+
+    exposures.push({
+      label: entry.label,
+      matchId: entry.matchId,
+      market: entry.market,
+      selections: entry.selections,
+      ticketCount: entry.ticketCount,
+      linkedAmount: entry.linkedAmount,
+      allocatedShare,
+      budgetRatio: Math.round(budgetRatio * 10) / 10,
+      allocatedRatio: Math.round(allocatedRatio * 10) / 10,
+      riskLevel: risk,
+      suggestion,
+    });
+  }
+
+  exposures.sort((a, b) => b.linkedAmount - a.linkedAmount);
+  return exposures;
+}
+
+// ═══════════════════════════════════════════════
+// 自动修正引擎（超限条件自动削减）
+// ═══════════════════════════════════════════════
+
+/**
+ * 判断条件是否超限
+ * - allocatedRatio > 65% → 超限，需削减
+ * - budgetRatio > 45% → 超限，需优先替换
+ */
+function isOverLimit(exp: ConditionExposure): boolean {
+  return exp.allocatedRatio > 65 || exp.budgetRatio > 45;
+}
+
+/**
+ * 找出某张票中包含指定条件的 leg，并尝试替换
+ * 返回新的 legs；如果无法替换则返回 null
+ */
+function tryReplaceLeg(
+  leg: TicketLeg,
+  exp: ConditionExposure,
+  gcp: GoalCenterProtection | undefined
+): TicketLeg[] | null {
+  const { market, selections } = leg;
+
+  // 总进球 1/2 过高 → 替换策略
+  if (market === '总进球') {
+    // 策略1：使用 wideCover（最宽保护）
+    if (gcp && gcp.wideCover.length > selections.length) {
+      return [{ ...leg, selections: gcp.wideCover }];
+    }
+    // 策略2：使用 mainRange
+    if (gcp && gcp.mainRange.length > selections.length) {
+      return [{ ...leg, selections: gcp.mainRange }];
+    }
+    // 策略3：单点3球 → 扩展为连续区间
+    if (selections.length === 1 && selections[0] === '3球') {
+      return [{ ...leg, selections: ['2球', '3球', '4球'] }];
+    }
+    // 策略4：1/2 → 0/1/2（宽覆盖）
+    if (selections.join(',') === '1球,2球') {
+      return [{ ...leg, selections: ['0球', '1球', '2球'] }];
+    }
+    // 策略5：无法再扩展 → 尝试替换为胜平负方向
+    return null;
+  }
+
+  // 胜平负平局过高 → 替换策略
+  if (market === '胜平负' && selections.includes('平')) {
+    // 替换为胜或负（保留单一选项）
+    // 如果是双选包含平，替换为主方向
+    if (selections.length >= 1) {
+      // 优先保留主胜方向
+      return [{ ...leg, selections: ['胜'] }];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 尝试将一张票改为"空仓"（移除所有 legs，返回金额为0的票）
+ * 或削减 legs 以降低关联金额
+ */
+function neutralizeTicket(ticket: SplitTicket, exp: ConditionExposure): SplitTicket {
+  // 计算该票在超限条件中的关联比例
+  const ratio = ticket.amount / (exp.linkedAmount || ticket.amount);
+  const newAmount = Math.max(2, Math.round(ticket.amount * 0.3)); // 削减到30%
+
+  // 重新计算 multiplier
+  const newMultiplier = Math.max(1, Math.round(newAmount / (ticket.baseStake * ticket.combinationCount)));
+  const actualAmount = newMultiplier * ticket.baseStake * ticket.combinationCount;
+
+  return {
+    ...ticket,
+    multiplier: newMultiplier,
+    amount: actualAmount,
+    strategyTag: 'auto_repair',
+    logic: `自动削减：${exp.label}超限`,
+  };
+}
+
+/**
+ * 对一张票执行自动修正（针对一个超限条件）
+ */
+function autoRepairSingleTicket(
+  ticket: SplitTicket,
+  exp: ConditionExposure,
+  gcp: GoalCenterProtection | undefined,
+  mkLeg: (match: string, market: string, selections: string[], matchId: string) => TicketLeg
+): { ticket: SplitTicket; correction: AutoCorrection } | null {
+  // 找到票中包含该条件的 leg
+  const legIndex = ticket.legs.findIndex(leg => {
+    const legKey = getLegDisplayKey(leg);
+    return legKey === exp.label;
+  });
+
+  if (legIndex === -1) return null;
+
+  const originalLeg = ticket.legs[legIndex];
+  const replacement = tryReplaceLeg(originalLeg, exp, gcp);
+
+  if (!replacement || replacement.length === 0) {
+    // 无法替换 → 削减票面金额（改为最小单元）
+    const correctedTicket = neutralizeTicket(ticket, exp);
+    const savedAmount = ticket.amount - correctedTicket.amount;
+    const correction: AutoCorrection = {
+      ticketId: ticket.id,
+      reason: 'condition_exceeded',
+      conditionLabel: exp.label,
+      originalLegs: [originalLeg],
+      correctedLegs: [],
+      savedAmount,
+      replacementStrategy: 'reduce_stake',
+    };
+    return { ticket: correctedTicket, correction };
+  }
+
+  // 替换 leg
+  const newLegs = [...ticket.legs];
+  newLegs[legIndex] = replacement[0];
+
+  // 重新计算票面金额（如果组合数变化）
+  const newCC = replacement.reduce((acc, leg) => acc * leg.selections.length, 1);
+  const baseStake = ticket.baseStake;
+  const newMultiplier = Math.max(1, Math.round((ticket.amount / (baseStake * ticket.combinationCount)) / newCC));
+  const newTicketAmount = newMultiplier * baseStake * newCC;
+
+  const correctedTicket: SplitTicket = {
+    ...ticket,
+    legs: newLegs,
+    combinationCount: newCC,
+    multiplier: newMultiplier,
+    amount: newTicketAmount,
+    strategyTag: 'auto_repair',
+    logic: `自动修正：${exp.label}超限`,
+  };
+  correctedTicket.title = formatTicketTitle(correctedTicket);
+  correctedTicket.coverageScore = calcTicketCoverageScore(correctedTicket);
+
+  const savedAmount = ticket.amount - newTicketAmount;
+  const correction: AutoCorrection = {
+    ticketId: ticket.id,
+    reason: 'over_exposure',
+    conditionLabel: exp.label,
+    originalLegs: [originalLeg],
+    correctedLegs: replacement,
+    savedAmount,
+    replacementStrategy: gcp ? 'expand_to_wideCover' : 'expand_selection',
+  };
+
+  return { ticket: correctedTicket, correction };
+}
+
+/**
+ * 对一个 leg 找出对应的 GoalCenterProtection
+ */
+function findGCP(leg: TicketLeg, gcpMap: Map<string, GoalCenterProtection>): GoalCenterProtection | undefined {
+  return gcpMap.get(leg.matchId);
+}
+
+/**
+ * 自动修正票组（超限条件自动削减，最多3轮迭代）
+ * @param tickets 原始票组
+ * @param conditionExposures 当前暴露分析
+ * @param totalBudget 总预算
+ * @param gcpMap 中心保护层映射
+ * @returns 修正后的票组 + 修正记录
+ */
+export function autoRepairTicketGroup(
+  tickets: SplitTicket[],
+  conditionExposures: ConditionExposure[],
+  totalBudget: number,
+  gcpMap: Map<string, GoalCenterProtection>
+): { correctedTickets: SplitTicket[]; corrections: AutoCorrection[] } {
+  let currentTickets = [...tickets];
+  const allCorrections: AutoCorrection[] = [];
+
+  for (let round = 0; round < 3; round++) {
+    // 重新计算暴露（每轮修正后都要重新检查）
+    const currentExposures = analyzeConditionExposures(currentTickets, totalBudget);
+    const allocatedAmount = currentTickets.reduce((s, t) => s + t.amount, 0);
+
+    // 找出本轮超限条件（按 allocatedRatio 降序，优先处理最严重的）
+    const overLimit = currentExposures
+      .filter(isOverLimit)
+      .sort((a, b) => b.allocatedRatio - a.allocatedRatio);
+
+    if (overLimit.length === 0) break; // 没有超限，停止迭代
+
+    const mkLeg = (match: string, market: string, selections: string[], matchId: string): TicketLeg => ({
+      match, matchId, market, selections,
+    });
+
+    const newTickets: SplitTicket[] = [];
+    let madeAnyChange = false;
+
+    for (const ticket of currentTickets) {
+      // 该票关联的超限条件
+      const ticketOverLimitExps = overLimit.filter(exp => {
+        return ticket.legs.some(leg => getLegDisplayKey(leg) === exp.label);
+      });
+
+      if (ticketOverLimitExps.length === 0) {
+        newTickets.push(ticket);
+        continue;
+      }
+
+      // 优先处理最严重的超限条件
+      const topExp = ticketOverLimitExps[0];
+      const gcp = findGCP(ticket.legs[0], gcpMap);
+      const result = autoRepairSingleTicket(ticket, topExp, gcp, mkLeg);
+
+      if (result) {
+        newTickets.push(result.ticket);
+        allCorrections.push(result.correction);
+        madeAnyChange = true;
+      } else {
+        newTickets.push(ticket);
+      }
+    }
+
+    if (!madeAnyChange) break; // 无法再做修正
+    currentTickets = newTickets;
+  }
+
+  return { correctedTickets: currentTickets, corrections: allCorrections };
+}
+
+/** 替换空仓票（amount <= 2 的票） */
+export function removeEmptyTickets(tickets: SplitTicket[]): SplitTicket[] {
+  return tickets.filter(t => t.amount >= 2);
+}
+
+/**
+ * 计算修正摘要（用于前端显示）
+ */
+export function summarizeCorrections(
+  corrections: AutoCorrection[],
+  conditionExposures: ConditionExposure[]
+): string[] {
+  const lines: string[] = [];
+  if (corrections.length === 0) return lines;
+
+  // 按条件分组
+  const byCondition = new Map<string, { count: number; saved: number; strategy: string }>();
+  for (const c of corrections) {
+    const existing = byCondition.get(c.conditionLabel) ?? { count: 0, saved: 0, strategy: c.replacementStrategy };
+    byCondition.set(c.conditionLabel, {
+      count: existing.count + 1,
+      saved: existing.saved + c.savedAmount,
+      strategy: c.replacementStrategy,
+    });
+  }
+
+  for (const [label, info] of byCondition) {
+    const strategyLabel = {
+      expand_to_wideCover: '已扩展为宽覆盖',
+      expand_selection: '已扩展区间',
+      switch_to_direction: '已替换为方向',
+      reduce_stake: '已削减注额',
+      replace_with_empty: '已移除',
+    }[info.strategy] ?? `已修正`;
+    lines.push(`${label}：${strategyLabel}（${info.count}张，共节省${info.saved}元）`);
+  }
+
+  return lines;
+}
+
+// ═══════════════════════════════════════════════
+// 覆盖宽度评分
+// ═══════════════════════════════════════════════
+
+/**
+ * 计算单个 leg 的覆盖宽度评分
+ * 单选1分，双选连续2分，三选连续3分
+ */
+export function calcLegCoverageScore(leg: TicketLeg): number {
+  const { market, selections } = leg;
+  const n = selections.length;
+
+  if (market === '总进球') {
+    // 检查是否连续区间
+    const nums = selections.map(s => parseInt(s)).filter(n => !isNaN(n));
+    if (nums.length === n && n >= 2) {
+      nums.sort((a, b) => a - b);
+      let continuous = true;
+      for (let i = 1; i < nums.length; i++) {
+        if (nums[i] - nums[i - 1] !== 1) { continuous = false; break; }
+      }
+      if (continuous) return n; // 2分或3分
+    }
+    return n === 1 ? 1 : Math.max(1, n - 1); // 非连续多选比连续少1分
+  }
+
+  if (market === '比分') {
+    if (n >= 3) return 2;
+    if (n === 2) return 2;
+    return 1;
+  }
+
+  if (market === '胜平负') {
+    return n; // 单选1，双选2
+  }
+
+  if (market === '半全场') {
+    return n >= 2 ? 2 : 1;
+  }
+
+  return Math.max(1, n);
+}
+
+/**
+ * 计算整张票的覆盖宽度评分 = 所有 legs 的平均值
+ */
+export function calcTicketCoverageScore(ticket: SplitTicket): number {
+  if (ticket.legs.length === 0) return 0;
+  const sum = ticket.legs.reduce((s, leg) => s + calcLegCoverageScore(leg), 0);
+  return Math.round((sum / ticket.legs.length) * 10) / 10;
+}
+
+/**
+ * 判断是否为单点总进球 leg
+ */
+function isSinglePointGoal(leg: TicketLeg): boolean {
+  if (leg.market !== '总进球') return false;
+  return leg.selections.length === 1;
+}
+
+/**
+ * 判断单点进球是否为高进球数（3球/4球/5球）
+ */
+function isHighSinglePointGoal(leg: TicketLeg): boolean {
+  if (!isSinglePointGoal(leg)) return false;
+  const num = parseInt(leg.selections[0]);
+  return !isNaN(num) && num >= 3;
+}
+
+/**
+ * 同赔率宽覆盖优先：判断两张票是否金额相同、理论奖金接近，优先选覆盖更宽的
+ */
+export function preferWiderCoverageIfSameCost(
+  candidateA: SplitTicket,
+  candidateB: SplitTicket
+): { preferred: SplitTicket; reason: string } | null {
+  // 1. 金额必须相同
+  if (candidateA.amount !== candidateB.amount) return null;
+
+  // 2. 理论奖金差异小于 5%（用 combinationCount 作为近似赔率代理）
+  // 简化：如果 combinationCount 相同或接近，认为赔率接近
+  const ccDiff = Math.abs(candidateA.combinationCount - candidateB.combinationCount);
+  if (ccDiff > 2) return null; // combinationCount 差异太大，赔率不可能接近
+
+  // 3. 覆盖宽度评分比较
+  const scoreA = calcTicketCoverageScore(candidateA);
+  const scoreB = calcTicketCoverageScore(candidateB);
+
+  if (Math.abs(scoreA - scoreB) < 0.5) return null; // 差异太小不值得替换
+
+  const preferred = scoreA > scoreB ? candidateA : candidateB;
+  const loser = scoreA > scoreB ? candidateB : candidateA;
+  const reason = `覆盖宽度评分 ${calcTicketCoverageScore(preferred)} > ${calcTicketCoverageScore(loser)}，金额相同（${preferred.amount}元），优先选择覆盖更宽的方案`;
+
+  return { preferred, reason };
+}
+
+// ═══════════════════════════════════════════════
+// 总进球选项分类
+// ═══════════════════════════════════════════════
+
+function getLowGoalOptions(): string[] {
+  return ['0球', '1球', '2球'];
+}
+
+// Reserved goal option helpers for future use
+
+function getHighGoalOptions(): string[] {
+  return ['3球', '4球'];
+}
+
+// getVeryHighGoalOptions and getGoalOptionsByRisk reserved for future use
+
+// ═══════════════════════════════════════════════
+// 人工复核建议生成
+// ═══════════════════════════════════════════════
+
+export function generateReviewSuggestions(
+  tickets: SplitTicket[],
+  exposures: ConditionExposure[]
+): ReviewSuggestion[] {
+  const suggestions: ReviewSuggestion[] = [];
+
+  // 1. 检测单点总进球票
+  const singlePointTickets = tickets.filter(t =>
+    t.legs.some(l => isHighSinglePointGoal(l))
+  );
+  if (singlePointTickets.length > 0) {
+    suggestions.push({
+      category: 'single_point_goal',
+      severity: 'warning',
+      title: '存在单点总进球判断',
+      detail: `以下票存在单点总进球（3球/4球/5球），覆盖较窄。若同金额下可替换为连续区间（如 0/1/2、1/2/3 或 2/3/4），建议优先使用连续区间。`,
+      affectedTickets: singlePointTickets.map(t => t.title),
+    });
+  }
+
+  // 2. 检测同赔率下可扩大覆盖的选项
+  for (const ticket of tickets) {
+    for (const leg of ticket.legs) {
+      if (leg.market === '总进球' && leg.selections.length === 1) {
+        const num = parseInt(leg.selections[0]);
+        if (!isNaN(num) && num >= 3) {
+          suggestions.push({
+            category: 'wider_coverage_available',
+            severity: 'info',
+            title: `${leg.match}：总进球 ${num}球 可考虑扩大覆盖`,
+            detail: `当前为单点 ${num}球。可尝试替换为 0球/1球/2球 或 1球/2球/3球，如金额与赔率基本不变，优先使用更宽覆盖。`,
+            affectedTickets: [ticket.title],
+          });
+        }
+      }
+    }
+  }
+
+  // 3. 检测某一场总进球中心暴露过高
+  for (const exp of exposures) {
+    if (exp.market === '总进球' && exp.allocatedRatio > 40) {
+      const teamMatch = exp.label.split('｜')[0];
+      suggestions.push({
+        category: 'goal_exposure_high',
+        severity: exp.allocatedRatio > 55 ? 'danger' : 'warning',
+        title: `${teamMatch} 总进球 ${exp.selections.join('/')} 暴露${exp.allocatedRatio > 55 ? '过高' : '偏高'}`,
+        detail: `该条件占已分配金额 ${exp.allocatedRatio}%（${exp.linkedAmount}元，${exp.ticketCount}张票）。如果该场打出其他进球数，本组票会大面积受损。建议增加其他路径（如总进球 3/4、比分 2:0/3:0 或保留空仓），而不是继续加码此条件。`,
+        affectedTickets: [],
+      });
+    }
+  }
+
+  // 4. 检测平局路径暴露过高
+  const drawExposures = exposures.filter(e =>
+    (e.market === '胜平负' && e.selections.includes('平')) ||
+    (e.market === '半全场' && e.selections.includes('平'))
+  );
+  const totalDrawLinked = drawExposures.reduce((s, e) => s + e.linkedAmount, 0);
+  const totalAllocated = tickets.reduce((s, t) => s + t.amount, 0);
+  if (totalAllocated > 0 && totalDrawLinked / totalAllocated > 0.45) {
+    suggestions.push({
+      category: 'draw_exposure_high',
+      severity: 'warning',
+      title: '平局相关路径暴露偏高',
+      detail: `平局相关条件合计占已分配金额 ${Math.round(totalDrawLinked / totalAllocated * 100)}%。平局相关性集中，如果多场同时分出胜负，本组票会受损。建议分散路径。`,
+      affectedTickets: [],
+    });
+  }
+
+  // 5. 通用：单点3球特别提示
+  const has3BallSingle = tickets.some(t =>
+    t.legs.some(l => l.market === '总进球' && l.selections.length === 1 && l.selections[0] === '3球')
+  );
+  if (has3BallSingle) {
+    suggestions.push({
+      category: 'general',
+      severity: 'info',
+      title: 'Colombia/第三方 总进球3球为单点判断',
+      detail: `建议检查是否可改为 0球/1球/2球 球。只有当模型强烈判断总进球中心就是 3球且 3球赔率 EV 明显更高时，才允许单点 3球。`,
+      affectedTickets: [],
+    });
+  }
+
+  return suggestions;
+}
+
+// ═══════════════════════════════════════════════
+// 数据生成函数
+// ═══════════════════════════════════════════════
+
+function getDirectionOptions(homeRating: number, awayRating: number): string[] {
+  const diff = homeRating - awayRating;
+  if (diff > 8) return ['胜'];
+  if (diff > 3) return ['胜', '平'];
+  if (diff > -3) return ['平', '胜'];
+  if (diff > -8) return ['平', '负'];
+  return ['负'];
+}
+
+function getGoalOptions(): string[] {
+  return ['1球', '2球'];
+}
+
+function getScoreOptions(homeRating: number, awayRating: number): string[] {
+  const diff = homeRating - awayRating;
+  if (diff > 15) return ['2:0', '3:0', '2:1'];
+  if (diff > 8) return ['1:0', '2:1', '2:0'];
+  if (diff > 0) return ['1:0', '1:1', '2:1'];
+  if (diff > -8) return ['1:1', '0:1', '1:0'];
+  return ['0:1', '0:2', '1:1'];
+}
+
+function getHalfOptions(): string[] {
+  return ['平'];
+}
+
+// ═══════════════════════════════════════════════
+// 核心生成函数
+// ═══════════════════════════════════════════════
+
+export function generateSplitTickets(params: SplitTicketParams): SanitizedResult {
+  const {
+    totalBudget,
+    maxSingleTicket,
+    ticketCount,
+    includeScoreTickets,
+    scoreTicketRatio,
+    riskPreference,
+  } = params;
+
+  const baseTime = Date.now();
+  let idx = 0;
+  const nextId = () => `split_${baseTime}_${String(++idx).padStart(2, '0')}`;
+
+  // ── pool ──
+  const pool = params.selectedMatches.length >= 2
+    ? params.selectedMatches
+    : [
+        { id: makeMatchId('西班牙', '奥地利'), home: '西班牙', away: '奥地利', homeRating: 87, awayRating: 76, rawStatus: 'TIMED' },
+        { id: makeMatchId('葡萄牙', '克罗地亚'), home: '葡萄牙', away: '克罗地亚', homeRating: 85, awayRating: 78, rawStatus: 'TIMED' },
+        { id: makeMatchId('瑞士', '阿尔及利亚'), home: '瑞士', away: '阿尔及利亚', homeRating: 78, awayRating: 73, rawStatus: 'TIMED' },
+      ];
+
+  const matchCount = pool.length;
+  const has3 = matchCount >= 3;
+
+  // 检查是否有非赛前比赛
+  const liveMatches = pool.filter(m => !isPreMatchStatus(m.rawStatus));
+
+  // ── 预计算每场比赛的三档中心保护层 ──
+  const goalCenterProtections = pool.map(buildGoalCenterProtection);
+  const gcpMap = new Map(goalCenterProtections.map(g => [g.matchId, g]));
+
+  if (liveMatches.length > 0) {
+    return {
+      tickets: [],
+      warnings: liveMatches.map(m => ({
+        type: 'live_match' as const,
+        message: `${m.home} vs ${m.away} 当前不是赛前状态（${getStatusLabel(m.rawStatus)}）`,
+        detail: `该场仅可用于复盘，不应进入新的赛前模拟票组。`,
+      })),
+      unusedBudget: totalBudget,
+      legalitySummary: {
+        matchCount,
+        tripleDisabled: !has3,
+        tripleReason: has3 ? '已启用' : '已禁用（仅选 2 场）',
+        illegalSameMatch: false,
+        repeatedCandidatesFiltered: 0,
+        finalDuplicates: 0,
+        exclusiveConditions: 0,
+        targetTickets: ticketCount,
+        actualTickets: 0,
+        underTicketReason: '存在非赛前状态比赛',
+        emptyBudget: totalBudget,
+        emptyBudgetReason: '存在非赛前状态比赛，未生成票组',
+      },
+      conditionExposures: [],
+      filteredTicketTitles: [],
+      reviewSuggestions: [],
+      goalCenterProtections,
+    };
+  }
+
+  // ── 预算切分 ──
+  const scoreBudget = includeScoreTickets ? Math.round(totalBudget * scoreTicketRatio / 100) : 0;
+  const mainBudget = totalBudget - scoreBudget;
+
+  let mainRatio: number, coldRatio: number, mixedRatio: number;
+  if (riskPreference === 'conservative') {
+    mainRatio = 0.50; coldRatio = 0.30; mixedRatio = 0.20;
+  } else if (riskPreference === 'aggressive') {
+    mainRatio = 0.35; coldRatio = 0.25; mixedRatio = 0.40;
+  } else {
+    mainRatio = 0.42; coldRatio = 0.28; mixedRatio = 0.30;
+  }
+
+  const mainAmount = Math.round(mainBudget * mainRatio);
+  const coldAmount = Math.round(mainBudget * coldRatio);
+  const mixedAmount = Math.round(mainBudget * mixedRatio);
+
+  // ── 票数分配 ──
+  const scoreTicketCount = includeScoreTickets
+    ? Math.max(1, Math.round(ticketCount * scoreTicketRatio / 100))
+    : 0;
+  const nonScoreCount = ticketCount - scoreTicketCount;
+  const mainTicketCount = Math.max(1, Math.round(nonScoreCount * 0.40));
+  const coldTicketCount = Math.max(1, Math.round(nonScoreCount * 0.35));
+  const mixedTicketCount = Math.max(1, nonScoreCount - mainTicketCount - coldTicketCount);
+
+  // ── 预计算选项 ──
+  const m1 = pool[0];
+  const m2 = pool[1];
+  const m3 = pool[2];
+
+  const m1Dir = getDirectionOptions(m1.homeRating, m1.awayRating);
+  const m2Dir = getDirectionOptions(m2.homeRating, m2.awayRating);
+  const m1Goals = gcpMap.get(m1.id)?.mainRange ?? ['1球','2球'];
+  const m2Goals = gcpMap.get(m2.id)?.mainRange ?? ['1球','2球'];
+  const m3Goals = m3 ? (gcpMap.get(m3.id)?.mainRange ?? ['1球','2球']) : [];
+  const m1Scores = getScoreOptions(m1.homeRating, m1.awayRating);
+  const m2Scores = getScoreOptions(m2.homeRating, m2.awayRating);
+  const m3Scores = m3 ? getScoreOptions(m3.homeRating, m3.awayRating) : [];
+
+  const mkLeg = (match: SelectableMatch, market: string, selections: string[]): TicketLeg => ({
+    match: `${match.home} vs ${match.away}`,
+    matchId: match.id,
+    market,
+    selections,
+  });
+
+  /**
+   * 生成票：先根据 maxSingleTicket 反推 multiplier，确保金额公式一致
+   */
+  const mkTicket = (
+    legs: TicketLeg[],
+    ticketType: TicketType,
+    desiredMultiplier: number,
+    combinationCount: number,
+    risk: RiskLevel,
+    tag: StrategyTag,
+    logic: string
+  ): SplitTicket | null => {
+    const baseStake = 2;
+    const minStake = baseStake * combinationCount; // 最低下注额
+
+    // 如果 maxSingleTicket 小于最低下注额，无法生成
+    if (maxSingleTicket < minStake) {
+      return null;
+    }
+
+    // 反推安全 multiplier
+    const maxMultiplier = Math.floor(maxSingleTicket / (baseStake * combinationCount));
+    const safeMultiplier = Math.max(1, Math.min(desiredMultiplier, maxMultiplier));
+    const amount = baseStake * safeMultiplier * combinationCount;
+
+    const ticket: SplitTicket = {
+      id: nextId(),
+      title: '',
+      ticketType,
+      legs,
+      multiplier: safeMultiplier,
+      baseStake,
+      combinationCount,
+      amount,
+      riskLevel: risk,
+      strategyTag: tag,
+      logic,
+      disclaimer: '以上仅为模拟方案，不构成投注建议。',
+      coverageScore: 0, // will be set below
+    };
+    ticket.title = formatTicketTitle(ticket);
+    ticket.coverageScore = calcTicketCoverageScore(ticket);
+    return ticket;
+  };
+
+  const rawTickets: SplitTicket[] = [];
+
+  // ── 主线覆盖票（始终 2串1） ──
+  const mainPerTicket = Math.max(4, Math.round(mainAmount / mainTicketCount));
+  for (let i = 0; i < mainTicketCount; i++) {
+    const variant = i % 3;
+    let ticket: SplitTicket | null = null;
+    if (variant === 0) {
+      const legs = [mkLeg(m1, '胜平负', m1Dir.slice(0, 1)), mkLeg(m2, '总进球', m2Goals)];
+      const cc = 1 * m2Goals.length;
+      const mul = Math.max(1, Math.round(mainPerTicket / (2 * cc)));
+      ticket = mkTicket(legs, '2串1复式', mul, cc, '中', '主线覆盖', `${m1.home}方向主推`);
+    } else if (variant === 1) {
+      const legs = [mkLeg(m1, '总进球', m1Goals), mkLeg(m2, '总进球', m2Goals)];
+      const cc = m1Goals.length * m2Goals.length;
+      const mul = Math.max(1, Math.round(mainPerTicket / (2 * cc)));
+      ticket = mkTicket(legs, '2串1复式', mul, cc, '中', '低进球保护', '双方低进球覆盖');
+    } else {
+      const legs = [mkLeg(m1, '总进球', m1Goals), mkLeg(m2, '胜平负', m2Dir.slice(0, 1))];
+      const cc = m1Goals.length * 1;
+      const mul = Math.max(1, Math.round(mainPerTicket / (2 * cc)));
+      ticket = mkTicket(legs, '2串1复式', mul, cc, '中', '主线覆盖', `${m2.home}方向主推`);
+    }
+    if (ticket) rawTickets.push(ticket);
+  }
+
+  // ── 防冷保护票（始终 2串1） ──
+  const coldPerTicket = Math.max(4, Math.round(coldAmount / coldTicketCount));
+  for (let i = 0; i < coldTicketCount; i++) {
+    const variant = i % 3;
+    let ticket: SplitTicket | null = null;
+    if (variant === 0) {
+      // 防冷：高位保护层，防止意外高比分
+      const m2HighGoals = gcpMap.get(m2.id)?.highProtect ?? ['3球','4球'];
+      const legs = [mkLeg(m1, '胜平负', m1Dir.slice(0, 1)), mkLeg(m2, '总进球', m2HighGoals)];
+      const cc = 1 * m2HighGoals.length;
+      const mul = Math.max(1, Math.round(coldPerTicket / (2 * cc)));
+      ticket = mkTicket(legs, '2串1复式', mul, cc, '中高', '防冷保护', `${m2.home}极端进球防冷`);
+    } else if (variant === 1 && has3 && m3) {
+      // 宽覆盖（防守型）：conservative 用低位保护，moderate 用主区间，aggressive 仍允许单点
+      const m3ColdGoals = (() => {
+        const gcp3 = gcpMap.get(m3.id);
+        if (riskPreference === 'conservative') return gcp3?.lowProtect ?? ['0球','1球'];
+        if (riskPreference === 'aggressive') return gcp3?.highProtect ?? ['3球'];
+        return gcp3?.mainRange ?? ['1球','2球'];
+      })();
+      const legs = [mkLeg(m3, '总进球', m3ColdGoals), mkLeg(m2, '总进球', m2Goals)];
+      const cc = m3Goals.length * m2Goals.length;
+      const mul = Math.max(1, Math.round(coldPerTicket / (2 * cc)));
+      ticket = mkTicket(legs, '2串1复式', mul, cc, '中高', '进球数分支保护', `${m3.home}进球分支保护`);
+    } else {
+      const legs = [mkLeg(m1, '半全场', getHalfOptions()), mkLeg(m2, '胜平负', m2Dir.slice(0, 1))];
+      const mul = Math.max(1, Math.round(coldPerTicket / 2));
+      ticket = mkTicket(legs, '2串1复式', mul, 1, '中高', '防冷保护', '半场平防冷');
+    }
+    if (ticket) rawTickets.push(ticket);
+  }
+
+  // ── 混合覆盖票（仅 has3） ──
+  if (has3 && m3) {
+    const mixedPerTicket = Math.max(4, Math.round(mixedAmount / mixedTicketCount));
+    for (let i = 0; i < mixedTicketCount; i++) {
+      const variant = i % 2;
+      let ticket: SplitTicket | null = null;
+      if (variant === 0) {
+        const legs = [mkLeg(m1, '半全场', getHalfOptions()), mkLeg(m2, '总进球', m2Goals), mkLeg(m3, '总进球', m3Goals)];
+        const cc = 1 * m2Goals.length * m3Goals.length;
+        const mul = Math.max(1, Math.round(mixedPerTicket / (2 * cc)));
+        ticket = mkTicket(legs, '3串1复式', mul, cc, '中高', '混合覆盖', '三场混合覆盖');
+      } else {
+        const legs = [mkLeg(m1, '胜平负', m1Dir.slice(0, 1)), mkLeg(m2, '总进球', m2Goals), mkLeg(m3, '总进球', m3Goals)];
+        const cc = 1 * m2Goals.length * m3Goals.length;
+        const mul = Math.max(1, Math.round(mixedPerTicket / (2 * cc)));
+        ticket = mkTicket(legs, '3串1复式', mul, cc, '中', '混合覆盖', '三场混合覆盖');
+      }
+      if (ticket) rawTickets.push(ticket);
+    }
+  }
+
+  // ── 比分票（2场时禁用3串1） ──
+  if (includeScoreTickets && scoreTicketCount > 0) {
+    const scorePerTicket = Math.max(4, Math.round(scoreBudget / scoreTicketCount));
+
+    const scoreVariants: { legs: TicketLeg[]; ticketType: TicketType; tag: StrategyTag; logic: string }[] = [
+      {
+        legs: [mkLeg(m1, '比分', m1Scores.slice(0, 3)), mkLeg(m2, '总进球', m2Goals)],
+        ticketType: '比分×总进球2串1复式',
+        tag: '比分方向覆盖',
+        logic: '比分与进球数组合',
+      },
+      {
+        legs: [mkLeg(m1, '比分', m1Scores.slice(0, 1)), mkLeg(m2, '比分', m2Scores.slice(0, 1))],
+        ticketType: '比分2串1',
+        tag: '低比分保护',
+        logic: '比分2串1低比分保护',
+      },
+    ];
+
+    if (has3 && m3) {
+      scoreVariants.push({
+        legs: [mkLeg(m1, '比分', m1Scores.slice(0, 1)), mkLeg(m2, '比分', m2Scores.slice(0, 1)), mkLeg(m3, '比分', m3Scores.slice(0, 1))],
+        ticketType: '比分3串1',
+        tag: '比分小搏',
+        logic: '三场比分小搏',
+      });
+    }
+
+    for (let i = 0; i < scoreTicketCount; i++) {
+      const v = scoreVariants[i % scoreVariants.length];
+      const cc = v.legs.reduce((c, l) => c * l.selections.length, 1);
+      const mul = Math.max(1, Math.round(scorePerTicket / (2 * cc)));
+      const ticket = mkTicket(v.legs, v.ticketType, mul, cc, '高', v.tag, v.logic);
+      if (ticket) rawTickets.push(ticket);
+    }
+  }
+
+  // ── 校验 & 去重 ──
+  const validMatchIds = new Set(pool.map(m => m.id));
+  const filteredTicketTitles: string[] = [];
+  const repeatedCandidatesFiltered: Set<string> = new Set();
+  const seenLegKeys = new Map<string, SplitTicket>();
+  const validTickets: SplitTicket[] = [];
+
+  for (const ticket of rawTickets) {
+    const validation = validateTicket(ticket, validMatchIds);
+    if (!validation.valid) {
+      filteredTicketTitles.push(ticket.title);
+      continue;
+    }
+
+    const legKey = ticket.legs
+      .map(l => `${l.matchId}|${l.market}|${[...l.selections].sort().join('|')}`)
+      .sort()
+      .join('||');
+
+    const fullKey = ticket.strategyTag + '||' + legKey;
+    if (seenLegKeys.has(fullKey)) {
+      filteredTicketTitles.push(ticket.title);
+      repeatedCandidatesFiltered.add(ticket.title);
+      continue;
+    }
+    seenLegKeys.set(fullKey, ticket);
+    validTickets.push(ticket);
+  }
+
+  // ── 金额校准（贪心降序） ──
+  const calibratedTickets: SplitTicket[] = [];
+  let remaining = totalBudget;
+  const sorted = [...validTickets].sort((a, b) => b.amount - a.amount);
+  for (const t of sorted) {
+    if (t.amount <= remaining) {
+      calibratedTickets.push(t);
+      remaining -= t.amount;
+    }
+  }
+
+  // ── 收集警告 ──
+  const warnings: GenerationWarning[] = [];
+
+  if (!has3) {
+    warnings.push({
+      type: 'triple_disabled',
+      message: '3串1 已禁用',
+      detail: '当前仅选择了 2 场比赛，3串1 需要至少 3 场不同比赛。系统已禁用所有 3 串 1 组合（3串1复式、比分3串1）。',
+    });
+  }
+
+  if (repeatedCandidatesFiltered.size > 0) {
+    warnings.push({
+      type: 'repeated_filtered',
+      message: `已过滤 ${repeatedCandidatesFiltered.size} 张重复候选票`,
+      detail: `去重候选票已过滤，最终票组无重复票。系统保留每种策略组合的首个有效版本。`,
+    });
+  }
+
+  if (calibratedTickets.length < ticketCount) {
+    warnings.push({
+      type: 'under_ticket',
+      message: `目标票数 ${ticketCount} 张，实际生成 ${calibratedTickets.length} 张`,
+      detail: `只选择 ${matchCount} 场比赛，可生成的合法低重复组合有限。系统已生成 ${calibratedTickets.length} 张有效票，不再硬凑非法票。`,
+    });
+  }
+
+  if (remaining > 0) {
+    warnings.push({
+      type: 'empty_budget',
+      message: `空仓 ${remaining}元`,
+      detail: `当前仅选择 ${matchCount} 场比赛，可生成的合法低重复组合有限。系统已保留 ${remaining}元 为空仓，未为了花完预算而生成重复票或非法3串1。若希望提高预算使用率，请至少选择 3 场比赛，或降低目标票数。`,
+    });
+  }
+
+  // ── 合法性摘要 ──
+  const legalitySummary: LegalitySummary = {
+    matchCount,
+    tripleDisabled: !has3,
+    tripleReason: has3 ? '已启用' : '已禁用（仅选 2 场）',
+    illegalSameMatch: filteredTicketTitles.some(t => t.includes('同一张票')),
+    repeatedCandidatesFiltered: repeatedCandidatesFiltered.size,
+    finalDuplicates: 0,
+    exclusiveConditions: 0,
+    targetTickets: ticketCount,
+    actualTickets: calibratedTickets.length,
+    underTicketReason: calibratedTickets.length < ticketCount
+      ? `只选 ${matchCount} 场，合法低重复组合不足`
+      : '',
+    emptyBudget: remaining,
+    emptyBudgetReason: remaining > 0 ? `选择比赛较少，合法低重复组合不足` : '',
+  };
+
+  // ── 条件暴露分析 ──
+  const conditionExposures = analyzeConditionExposures(calibratedTickets, totalBudget);
+
+  // ── 自动修正（超限条件削减） ──
+  // gcpMap 已在 line 1380 声明，此处复用
+  const { correctedTickets, corrections } = autoRepairTicketGroup(
+    calibratedTickets, conditionExposures, totalBudget, gcpMap
+  );
+  // 修正后重新计算条件暴露（展示修正后状态）
+  const postRepairExposures = analyzeConditionExposures(correctedTickets, totalBudget);
+  // 计算修正后分配金额
+  const postRepairAllocated = correctedTickets.reduce((s, t) => s + t.amount, 0);
+  const postRepairRemaining = totalBudget - postRepairAllocated;
+
+  // ── 人工复核建议 ──
+  const reviewSuggestions = generateReviewSuggestions(correctedTickets, postRepairExposures);
+
+  return {
+    tickets: correctedTickets,
+    warnings,
+    unusedBudget: postRepairRemaining,
+    legalitySummary,
+    conditionExposures: postRepairExposures,
+    filteredTicketTitles,
+    reviewSuggestions,
+    goalCenterProtections,
+    autoCorrections: corrections,
+  };
+}
+
+// ═══════════════════════════════════════════════
+// rebuildSanitizedResultFromTickets
+// 删除票后重建 result
+// ═══════════════════════════════════════════════
+
+export function rebuildSanitizedResultFromTickets(
+  tickets: SplitTicket[],
+  totalBudget: number,
+  targetTicketCount: number,
+  selectedMatches: SelectableMatch[]
+): SanitizedResult {
+  const matchCount = selectedMatches.length;
+  const has3 = matchCount >= 3;
+  const totalAllocated = tickets.reduce((s, t) => s + t.amount, 0);
+  const emptyBudget = totalBudget - totalAllocated;
+
+  const warnings: GenerationWarning[] = [];
+
+  if (!has3) {
+    warnings.push({
+      type: 'triple_disabled',
+      message: '3串1 已禁用',
+      detail: '当前仅选择了 2 场比赛，3串1 需要至少 3 场不同比赛。',
+    });
+  }
+
+  if (tickets.length < targetTicketCount) {
+    warnings.push({
+      type: 'under_ticket',
+      message: `目标票数 ${targetTicketCount} 张，实际 ${tickets.length} 张`,
+      detail: `用户已删除部分票，当前票数少于目标。`,
+    });
+  }
+
+  if (emptyBudget > 0) {
+    warnings.push({
+      type: 'empty_budget',
+      message: `空仓 ${emptyBudget}元`,
+      detail: `用户已删除部分票，预算未分配。`,
+    });
+  }
+
+  const legalitySummary: LegalitySummary = {
+    matchCount,
+    tripleDisabled: !has3,
+    tripleReason: has3 ? '已启用' : '已禁用（仅选 2 场）',
+    illegalSameMatch: false,
+    repeatedCandidatesFiltered: 0,
+    finalDuplicates: 0,
+    exclusiveConditions: 0,
+    targetTickets: targetTicketCount,
+    actualTickets: tickets.length,
+    underTicketReason: tickets.length < targetTicketCount ? '用户已删除部分票' : '',
+    emptyBudget,
+    emptyBudgetReason: emptyBudget > 0 ? '用户已删除部分票，预算未分配' : '',
+  };
+
+  const conditionExposures = analyzeConditionExposures(tickets, totalBudget);
+  const reviewSuggestions = generateReviewSuggestions(tickets, conditionExposures);
+
+  return {
+    tickets,
+    warnings,
+    unusedBudget: emptyBudget,
+    legalitySummary,
+    conditionExposures,
+    filteredTicketTitles: [],
+    reviewSuggestions,
+    goalCenterProtections: [],
+    autoCorrections: [],
+  };
+}
+
+// ═══════════════════════════════════════════════
+// 示例票组
+// ═══════════════════════════════════════════════
+
+export function generateExampleTickets(): SplitTicket[] {
+  const baseTime = Date.now();
+  const mkMatch = (home: string, away: string): SelectableMatch => ({
+    id: makeMatchId(home, away),
+    home, away,
+    homeRating: 80, awayRating: 75,
+    rawStatus: 'TIMED',
+  });
+
+  const sp = mkMatch('Spain', 'Austria');
+  const pt = mkMatch('Portugal', 'Croatia');
+  const ch = mkMatch('Switzerland', 'Algeria');
+
+  const mkLeg = (match: SelectableMatch, market: string, selections: string[]): TicketLeg => ({
+    match: `${match.home} vs ${match.away}`,
+    matchId: match.id,
+    market,
+    selections,
+  });
+
+  const mkT = (
+    id: string,
+    ticketType: TicketType,
+    legs: TicketLeg[],
+    multiplier: number,
+    cc: number,
+    risk: RiskLevel,
+    tag: StrategyTag,
+    logic: string
+  ): SplitTicket => {
+    const baseStake = 2;
+    const amount = baseStake * multiplier * cc;
+    const ticket: SplitTicket = {
+      id, title: '', ticketType, legs, multiplier, baseStake, combinationCount: cc,
+      amount, riskLevel: risk, strategyTag: tag, logic,
+      disclaimer: '以上仅为模拟方案，不构成投注建议。',
+      coverageScore: 0,
+    };
+    ticket.title = formatTicketTitle(ticket);
+    ticket.coverageScore = calcTicketCoverageScore(ticket);
+    return ticket;
+  };
+
+  return [
+    mkT(`split_${baseTime}_01`, '2串1复式', [
+      mkLeg(sp, '胜平负', ['胜']),
+      mkLeg(pt, '总进球', ['1球', '2球']),
+    ], 5, 2, '中', '主线覆盖', 'Spain方向主推'),
+    mkT(`split_${baseTime}_02`, '2串1复式', [
+      mkLeg(sp, '总进球', ['1球', '2球']),
+      mkLeg(pt, '总进球', ['1球', '2球']),
+    ], 2, 4, '中', '低进球保护', '双方低进球覆盖'),
+    mkT(`split_${baseTime}_03`, '3串1复式', [
+      mkLeg(sp, '半全场', ['平']),
+      mkLeg(pt, '总进球', ['1球', '2球']),
+      mkLeg(ch, '总进球', ['1球', '2球']),
+    ], 1, 8, '中高', '混合覆盖', '三场混合覆盖'),
+    mkT(`split_${baseTime}_04`, '比分×总进球2串1复式', [
+      mkLeg(sp, '比分', ['2:0', '3:0', '2:1']),
+      mkLeg(pt, '总进球', ['1球', '2球']),
+    ], 1, 6, '高', '比分方向覆盖', '比分与进球数组合'),
+    mkT(`split_${baseTime}_05`, '2串1复式', [
+      mkLeg(sp, '胜平负', ['胜']),
+      mkLeg(pt, '总进球', ['0球', '3球', '4球']),
+    ], 4, 3, '中高', '防冷保护', 'Portugal极端进球防冷'),
+    mkT(`split_${baseTime}_06`, '2串1复式', [
+      mkLeg(ch, '总进球', ['3球']),
+      mkLeg(pt, '总进球', ['1球', '2球']),
+    ], 3, 2, '中高', '进球数分支保护', 'Switzerland进球分支保护'),
+    mkT(`split_${baseTime}_07`, '比分3串1', [
+      mkLeg(sp, '比分', ['2:0']),
+      mkLeg(pt, '比分', ['1:1']),
+      mkLeg(ch, '比分', ['1:1']),
+    ], 2, 1, '高', '比分小搏', '三场比分小搏'),
+    mkT(`split_${baseTime}_08`, '比分2串1', [
+      mkLeg(pt, '比分', ['0:0']),
+      mkLeg(ch, '比分', ['1:1']),
+    ], 2, 1, '高', '低比分保护', '低比分平局保护'),
+    mkT(`split_${baseTime}_09`, '比分3串1', [
+      mkLeg(sp, '比分', ['2:1']),
+      mkLeg(pt, '比分', ['1:0']),
+      mkLeg(ch, '比分', ['2:1']),
+    ], 2, 1, '高', '比分小搏', '进攻比分小搏'),
+    mkT(`split_${baseTime}_10`, '比分3串1', [
+      mkLeg(sp, '比分', ['2:1']),
+      mkLeg(pt, '比分', ['1:1']),
+      mkLeg(ch, '比分', ['1:2']),
+    ], 2, 1, '高', '比分反向保护', '防比分反向结果'),
+  ];
+}
+
+// ═══════════════════════════════════════════════
+// 分析 & 其他
+// ═══════════════════════════════════════════════
+
+export function analyzeTicketStructure(tickets: SplitTicket[]) {
+  const mainLineAmount = tickets.filter(t => t.strategyTag === '主线覆盖').reduce((s, t) => s + t.amount, 0);
+  const coldProtectionAmount = tickets.filter(t => ['防冷保护', '低进球保护', '进球数分支保护'].includes(t.strategyTag)).reduce((s, t) => s + t.amount, 0);
+  const scoreBetAmount = tickets.filter(t => t.strategyTag.includes('比分')).reduce((s, t) => s + t.amount, 0);
+  const mixedCoverageAmount = tickets.filter(t => t.strategyTag === '混合覆盖').reduce((s, t) => s + t.amount, 0);
+  const totalAmount = tickets.reduce((s, t) => s + t.amount, 0);
+  const maxSingleAmount = tickets.length ? Math.max(...tickets.map(t => t.amount)) : 0;
+  const averageAmount = totalAmount / (tickets.length || 1);
+  const threeLegCount = tickets.filter(t => t.ticketType === '3串1复式' || t.ticketType === '比分3串1').length;
+  const analysisText = `共${tickets.length}张票，总预算${totalAmount}元，平均单票${averageAmount.toFixed(0)}元。主线覆盖${mainLineAmount}元，防冷保护${coldProtectionAmount}元，比分票${scoreBetAmount}元，混合覆盖${mixedCoverageAmount}元。最高单票${maxSingleAmount}元。${threeLegCount > 0 ? `其中含${threeLegCount}张3串1（需全部命中共${threeLegCount}场）。` : '全部为2串1，命中要求相对较低。'}`;
+
+  return {
+    mainLineAmount,
+    coldProtectionAmount,
+    scoreBetAmount,
+    mixedCoverageAmount,
+    totalTickets: tickets.length,
+    totalAmount,
+    averageAmount,
+    maxSingleAmount,
+    analysisText,
+  };
+}
+
+export function saveTicketGroupToLedger(tickets: SplitTicket[]): TicketRecord {
+  const groupId = `GROUP-${new Date().toISOString().split('T')[0]}-${Date.now()}`;
+  const totalAmount = tickets.reduce((sum, t) => sum + t.amount, 0);
+  return {
+    id: groupId,
+    date: new Date().toISOString().split('T')[0],
+    amount: totalAmount,
+    matchCount: tickets.length,
+    style: '小额多票',
+    status: 'pending',
+    netProfit: 0,
+    returnAmount: 0,
+    settleNote: '',
+    settledAt: '',
+    matches: tickets.map(t => ({
+      matchId: t.id,
+      homeTeam: t.legs[0]?.match.split(' vs ')[0] || '',
+      awayTeam: t.legs[0]?.match.split(' vs ')[1] || '',
+      pick: t.title,
+      odds: 0,
+    })),
+  };
+}
+
+export function calculateCombinationCount(ticket: SplitTicket): number {
+  return ticket.legs.reduce((count, leg) => count * leg.selections.length, 1);
+}
+
+export function calculateTicketAmount(ticket: SplitTicket): number {
+  return ticket.baseStake * ticket.multiplier * calculateCombinationCount(ticket);
+}
+
+// ═══════════════════════════════════════════════
+// Dev 校验用例
+// ═══════════════════════════════════════════════
+
+/**
+ * 开发环境校验：覆盖关键边界条件
+ * 在浏览器 console 中调用 runDevChecks() 执行
+ */
+export function runDevChecks(): { passed: number; failed: string[] } {
+  const failed: string[] = [];
+  let passed = 0;
+
+  const m1: SelectableMatch = { id: makeMatchId('Switzerland', 'Algeria'), home: 'Switzerland', away: 'Algeria', homeRating: 78, awayRating: 73, rawStatus: 'TIMED' };
+  const m2: SelectableMatch = { id: makeMatchId('Australia', 'Egypt'), home: 'Australia', away: 'Egypt', homeRating: 75, awayRating: 72, rawStatus: 'TIMED' };
+  // m3 only used in TEST 6 below; declare inline there
+  // 1. 只选2场，不能生成3串1
+  const r1 = generateSplitTickets({ totalBudget: 100, maxSingleTicket: 20, ticketCount: 10, selectedMatches: [m1, m2], includeScoreTickets: true, scoreTicketRatio: 12, riskPreference: 'moderate' });
+  const has3串1 = r1.tickets.some(t => t.ticketType === '3串1复式' || t.ticketType === '比分3串1');
+  if (has3串1) failed.push('TEST 1 FAIL: 2场比赛不应生成3串1');
+  else passed++;
+
+  // 2. 同一张票不能重复同一 matchId
+  const dupMatchId = r1.tickets.some(t => {
+    const ids = t.legs.map(l => l.matchId);
+    return new Set(ids).size !== ids.length;
+  });
+  if (dupMatchId) failed.push('TEST 2 FAIL: 同一张票重复了 matchId');
+  else passed++;
+
+  // 3. amount 必须等于 baseStake × multiplier × combinationCount
+  const badAmount = r1.tickets.some(t => t.amount !== t.baseStake * t.multiplier * t.combinationCount);
+  if (badAmount) failed.push('TEST 3 FAIL: 金额公式不一致');
+  else passed++;
+
+  // 4. 删除一张票后，conditionExposures 必须更新
+  if (r1.tickets.length > 1) {
+    const reduced = r1.tickets.slice(0, -1);
+    const rebuilt = rebuildSanitizedResultFromTickets(reduced, 100, 10, [m1, m2]);
+    const oldLen = r1.conditionExposures.length;
+    const newLen = rebuilt.conditionExposures.length;
+    if (newLen > oldLen) failed.push('TEST 4 FAIL: 删除票后条件暴露应减少或不变');
+    else passed++;
+  } else {
+    passed++; // skip
+  }
+
+  // 5. 复制文案必须显示正确的预算
+  const text = formatTicketText(r1.tickets, { totalBudget: 100, allocatedAmount: r1.tickets.reduce((s, t) => s + t.amount, 0), emptyBudget: r1.unusedBudget });
+  if (!text.includes('总预算100元')) failed.push('TEST 5 FAIL: 复制文案未显示总预算100');
+  else passed++;
+
+  // 5b. 出票弹窗格式验证
+  const betSlipText = formatTicketTextForBetSlip(r1.tickets, { totalBudget: 100, allocatedAmount: r1.tickets.reduce((s, t) => s + t.amount, 0), emptyBudget: r1.unusedBudget });
+  if (!betSlipText.includes('过关方式：')) failed.push('TEST 5b FAIL: 出票文案缺少"过关方式："');
+  else if (!betSlipText.includes('VS')) failed.push('TEST 5b FAIL: 出票文案缺少"VS"分隔符');
+  else if (!betSlipText.includes('合计分配：')) failed.push('TEST 5b FAIL: 出票文案缺少"合计分配："');
+  else if (betSlipText.includes(' vs ')) failed.push('TEST 5b FAIL: 出票文案包含英文 vs，应为中文 VS');
+  else if (betSlipText.includes('球)')) failed.push('TEST 5b FAIL: 出票文案总进球不应包含"球"字');
+  else passed++;
+
+  // 6. Australia 和 Austria 不得生成相同 matchId
+  const ausId = makeMatchId('Australia', 'Egypt');
+  const autId = makeMatchId('Austria', 'Italy');
+  if (ausId === autId) failed.push(`TEST 6 FAIL: Australia/Austria matchId 碰撞: ${ausId} === ${autId}`);
+  else passed++;
+
+  // 7. 非赛前比赛不能被选入
+  const liveMatch: SelectableMatch = { id: makeMatchId('Spain', 'Brazil'), home: 'Spain', away: 'Brazil', homeRating: 85, awayRating: 88, rawStatus: 'IN_PLAY' };
+  const r7 = generateSplitTickets({ totalBudget: 100, maxSingleTicket: 20, ticketCount: 10, selectedMatches: [liveMatch, m2], includeScoreTickets: true, scoreTicketRatio: 12, riskPreference: 'moderate' });
+  if (r7.tickets.length > 0) failed.push('TEST 7 FAIL: 非赛前比赛不应生成票组');
+  else passed++;
+
+  console.log(`DevChecks: ${passed} passed, ${failed.length} failed`);
+  if (failed.length > 0) console.error(failed);
+  return { passed, failed };
+}

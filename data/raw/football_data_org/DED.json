@@ -1,0 +1,16 @@
+{
+  "filters": {
+    "season": "2026"
+  },
+  "resultSet": {
+    "count": 0
+  },
+  "competition": {
+    "id": 2003,
+    "name": "Eredivisie",
+    "code": "DED",
+    "type": "LEAGUE",
+    "emblem": "https://crests.football-data.org/ED.png"
+  },
+  "matches": []
+}

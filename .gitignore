@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (包含 API Key，绝不提交)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Vercel
+.vercel/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log

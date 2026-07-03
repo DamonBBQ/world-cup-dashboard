@@ -1,0 +1,97 @@
+{
+  "total": 13,
+  "lastSync": "2026-07-03T01:51:01.073910+00:00",
+  "competitions": [
+    {
+      "id": 2013,
+      "name": "Campeonato Brasileiro Série A",
+      "code": "BSA",
+      "area": "Brazil",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2016,
+      "name": "Championship",
+      "code": "ELC",
+      "area": "England",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2021,
+      "name": "Premier League",
+      "code": "PL",
+      "area": "England",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2001,
+      "name": "UEFA Champions League",
+      "code": "CL",
+      "area": "Europe",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2018,
+      "name": "European Championship",
+      "code": "EC",
+      "area": "Europe",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2015,
+      "name": "Ligue 1",
+      "code": "FL1",
+      "area": "France",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2002,
+      "name": "Bundesliga",
+      "code": "BL1",
+      "area": "Germany",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2019,
+      "name": "Serie A",
+      "code": "SA",
+      "area": "Italy",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2003,
+      "name": "Eredivisie",
+      "code": "DED",
+      "area": "Netherlands",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2017,
+      "name": "Primeira Liga",
+      "code": "PPL",
+      "area": "Portugal",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2152,
+      "name": "Copa Libertadores",
+      "code": "CLI",
+      "area": "South America",
+      "plan": "TIER_FOUR"
+    },
+    {
+      "id": 2014,
+      "name": "Primera Division",
+      "code": "PD",
+      "area": "Spain",
+      "plan": "TIER_ONE"
+    },
+    {
+      "id": 2000,
+      "name": "FIFA World Cup",
+      "code": "WC",
+      "area": "World",
+      "plan": "TIER_ONE"
+    }
+  ]
+}

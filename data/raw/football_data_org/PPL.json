@@ -1,0 +1,16 @@
+{
+  "filters": {
+    "season": "2025"
+  },
+  "resultSet": {
+    "count": 0
+  },
+  "competition": {
+    "id": 2017,
+    "name": "Primeira Liga",
+    "code": "PPL",
+    "type": "LEAGUE",
+    "emblem": "https://crests.football-data.org/PPL.png"
+  },
+  "matches": []
+}

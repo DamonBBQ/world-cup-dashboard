@@ -1,0 +1,41 @@
+{
+  "name": "world-cup-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173 --strictPort",
+    "kill:5173": "kill-port 5173",
+    "dev:restart": "npm run kill:5173 && npm run dev",
+    "clean": "rimraf node_modules/.vite dist",
+    "dev:clean": "npm run clean && npm run dev",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "evolve:3y": "python scripts/evolution/run_strategy_evolution.py --window 3y --bankroll 500",
+    "evolve:5y": "python scripts/evolution/run_strategy_evolution.py --window 5y --bankroll 500",
+    "evolve:10y": "python scripts/evolution/run_strategy_evolution.py --window 10y --bankroll 500",
+    "report:latest": "python scripts/report/build_backtest_report.py",
+    "dashboard:data": "python scripts/report/build_dashboard_json.py"
+  },
+  "dependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "kill-port": "^2.1.0",
+    "lucide-react": "^1.23.0",
+    "oxlint": "^1.71.0",
+    "recharts": "^3.9.1",
+    "rimraf": "^6.0.1",
+    "tailwindcss": "^4.3.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}
