@@ -41,7 +41,7 @@ const TEAM_RATINGS: Record<string, number> = {
   'Switzerland': 79, 'Denmark': 77, 'Austria': 76, 'Poland': 73, 'Serbia': 74,
   'Canada': 74, 'Cameroon': 71, 'Ghana': 72, 'Tunisia': 70, 'Iran': 71,
   'Saudi Arabia': 68, 'Qatar': 65, 'Australia': 72, 'Costa Rica': 70, 'Wales': 73,
-  'Algeria': 72, 'Egypt': 73, 'Nigeria': 74, 'Senegal': 73, 'Mali': 70,
+  'Algeria': 72, 'Egypt': 73, 'Nigeria': 74, 'Mali': 70,
   'Ivory Coast': 72, 'South Africa': 69, 'Al Ahly': 65, 'Wydad Casablanca': 64,
 };
 
