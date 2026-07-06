@@ -1,4 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import {
+  KNOCKOUT_FIXTURES,
+  computeSurvivorsFromFallback,
+  type FallbackMatch,
+} from './_world-cup-2026-fallback';
 
 interface SurvivorTeam {
   name: string;
@@ -6,7 +11,7 @@ interface SurvivorTeam {
   abbreviation?: string;
   lastMatchId?: string;
   lastMatchStatus?: 'NOT_STARTED' | 'LIVE' | 'FINISHED';
-  source: 'espn-worldcup';
+  source: 'espn-worldcup' | 'static-knockout';
 }
 
 interface MatchEvent {
@@ -21,7 +26,6 @@ interface MatchEvent {
   loserName: string | null;
 }
 
-// 从世界杯开幕日（小�组赛第一天）开始，确保淘汰推断有完整数据
 const WORLD_CUP_KNOCKOUT_START =
   process.env.WORLD_CUP_KNOCKOUT_START || '2026-06-11';
 
@@ -68,6 +72,8 @@ function normalizeTeamName(value: unknown): string {
     'Democratic Republic of Congo': 'DR Congo',
     'Cape Verde Islands': 'Cape Verde',
     Türkiye: 'Turkey',
+    'Korea Republic': 'South Korea',
+    'England (UK)': 'England',
   };
 
   return aliasMap[name] || name;
@@ -75,12 +81,10 @@ function normalizeTeamName(value: unknown): string {
 
 function isInvalidTeamName(value: unknown): boolean {
   const name = String(value || '').trim();
-
   if (!name) return true;
-
-  const invalidWords = ['TBD', 'None', 'Winner of', 'Loser of', '待定'];
-
-  return invalidWords.some(word => name.includes(word));
+  return ['TBD', 'None', 'Winner of', 'Loser of', '待定'].some(word =>
+    name.includes(word)
+  );
 }
 
 function containsExcludedKeyword(value: unknown): boolean {
@@ -118,7 +122,6 @@ function normalizeEspnStatus(
 
 function toNullableNumber(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
-
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -149,18 +152,16 @@ function enumerateDates(startDate: string, endDate: string): string[] {
 }
 
 function isEspnWorldCupEvent(event: any): boolean {
-  const leagueName = normalizeText(event?.league?.name);
-  const leagueSlug = normalizeText(event?.league?.slug);
-  const eventName = normalizeText(event?.name);
-  const shortName = normalizeText(event?.shortName);
+  const text = [
+    event?.league?.name,
+    event?.league?.slug,
+    event?.name,
+    event?.shortName,
+  ]
+    .map(normalizeText)
+    .join(' ');
 
-  const text = `${leagueName} ${leagueSlug} ${eventName} ${shortName}`;
-
-  if (containsExcludedKeyword(text)) {
-    return false;
-  }
-
-  return true;
+  return !containsExcludedKeyword(text);
 }
 
 function extractTeam(competitor: any): SurvivorTeam | null {
@@ -197,12 +198,9 @@ function convertEspnEvent(event: any): MatchEvent | null {
   }
 
   const homeCompetitor =
-    competitors.find((c: any) => c.homeAway === 'home') ||
-    competitors[0];
-
+    competitors.find((c: any) => c.homeAway === 'home') || competitors[0];
   const awayCompetitor =
-    competitors.find((c: any) => c.homeAway === 'away') ||
-    competitors[1];
+    competitors.find((c: any) => c.homeAway === 'away') || competitors[1];
 
   const homeTeam = extractTeam(homeCompetitor);
   const awayTeam = extractTeam(awayCompetitor);
@@ -218,31 +216,19 @@ function convertEspnEvent(event: any): MatchEvent | null {
   let winnerName: string | null = null;
   let loserName: string | null = null;
 
-  if (status === 'FINISHED' && event.winnerName && event.loserName) {
-    const winnerCompetitor = competitors.find((c: any) => c.winner === true);
-
-    if (winnerCompetitor) {
-      const winnerTeam = extractTeam(winnerCompetitor);
-      winnerName = winnerTeam?.name || null;
-
-      if (winnerName === homeTeam.name) {
-        loserName = awayTeam.name;
-      } else if (winnerName === awayTeam.name) {
-        loserName = homeTeam.name;
-      }
-    } else if (
-      homeScore !== null &&
-      awayScore !== null &&
-      homeScore !== awayScore
-    ) {
-      winnerName = homeScore > awayScore ? homeTeam.name : awayTeam.name;
-      loserName = homeScore > awayScore ? awayTeam.name : homeTeam.name;
+  if (status === 'FINISHED' && homeScore !== null && awayScore !== null) {
+    if (homeScore > awayScore) {
+      winnerName = homeTeam.name;
+      loserName = awayTeam.name;
+    } else if (awayScore > homeScore) {
+      winnerName = awayTeam.name;
+      loserName = homeTeam.name;
     }
   }
 
   return {
     id: String(event?.id || ''),
-    date: String(event?.date || ''),
+    date: String(event?.date || '').slice(0, 10),
     status,
     homeTeam,
     awayTeam,
@@ -267,7 +253,7 @@ async function fetchEspnEventsByDate(
   });
 
   if (!response.ok) {
-    throw new Error(`ESPN World Cup 请求失败: HTTP ${response.status}`);
+    throw new Error(`ESPN HTTP ${response.status}`);
   }
 
   const data = await response.json();
@@ -280,49 +266,51 @@ async function fetchEspnEventsByDate(
     );
 }
 
-function sortEventsChronologically(events: MatchEvent[]): MatchEvent[] {
-  return [...events].sort((a, b) => {
-    const ta = new Date(a.date).getTime();
-    const tb = new Date(b.date).getTime();
-
-    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
-    if (Number.isNaN(ta)) return 1;
-    if (Number.isNaN(tb)) return -1;
-
-    return ta - tb;
-  });
-}
-
-function computeSurvivors(events: MatchEvent[]): SurvivorTeam[] {
+function computeSurvivorsFromEspn(events: MatchEvent[]): SurvivorTeam[] {
   const activeTeams = new Map<string, SurvivorTeam>();
   const eliminatedTeams = new Set<string>();
 
-  const sortedEvents = sortEventsChronologically(events);
+  // 按日期排序（已结束的在前）
+  const sorted = [...events].sort((a, b) => {
+    const ta = new Date(a.date).getTime();
+    const tb = new Date(b.date).getTime();
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+    if (Number.isNaN(ta)) return 1;
+    if (Number.isNaN(tb)) return -1;
+    return ta - tb;
+  });
 
-  for (const event of sortedEvents) {
-    const participants = [event.homeTeam, event.awayTeam];
-
-    for (const team of participants) {
-      if (!eliminatedTeams.has(team.name)) {
-        activeTeams.set(team.name, {
-          ...team,
+  for (const event of sorted) {
+    // 未开始或进行中：双方都保留
+    if (event.status !== 'FINISHED') {
+      if (
+        !eliminatedTeams.has(event.homeTeam.name) &&
+        !isInvalidTeamName(event.homeTeam.name)
+      ) {
+        activeTeams.set(event.homeTeam.name, {
+          ...event.homeTeam,
           lastMatchId: event.id,
           lastMatchStatus: event.status,
         });
       }
-    }
-
-    if (event.status === 'FINISHED' && event.winnerName && event.loserName) {
+      if (
+        !eliminatedTeams.has(event.awayTeam.name) &&
+        !isInvalidTeamName(event.awayTeam.name)
+      ) {
+        activeTeams.set(event.awayTeam.name, {
+          ...event.awayTeam,
+          lastMatchId: event.id,
+          lastMatchStatus: event.status,
+        });
+      }
+    } else if (event.winnerName && event.loserName) {
+      // 已结束：败者淘汰，胜者保留
       eliminatedTeams.add(event.loserName);
       activeTeams.delete(event.loserName);
-
-      const winner =
-        event.winnerName === event.homeTeam.name
-          ? event.homeTeam
-          : event.awayTeam;
-
       activeTeams.set(event.winnerName, {
-        ...winner,
+        ...(event.winnerName === event.homeTeam.name
+          ? event.homeTeam
+          : event.awayTeam),
         lastMatchId: event.id,
         lastMatchStatus: event.status,
       });
@@ -332,6 +320,38 @@ function computeSurvivors(events: MatchEvent[]): SurvivorTeam[] {
   return [...activeTeams.values()].sort((a, b) =>
     a.name.localeCompare(b.name)
   );
+}
+
+/**
+ * 从本地兜底数据计算幸存球队
+ */
+function computeSurvivorsFromLocalFallback(): SurvivorTeam[] {
+  const survivors = computeSurvivorsFromFallback(KNOCKOUT_FIXTURES);
+
+  return survivors.map(name => {
+    const match = KNOCKOUT_FIXTURES.find(
+      m =>
+        m.homeTeam.name === name ||
+        m.awayTeam.name === name
+    );
+    const lastMatch = match
+      ? KNOCKOUT_FIXTURES.filter(
+          m => m.homeTeam.name === name || m.awayTeam.name === name
+        ).slice(-1)[0]
+      : undefined;
+
+    return {
+      name,
+      flag: match
+        ? match.homeTeam.name === name
+          ? match.homeTeam.flag
+          : match.awayTeam.flag
+        : '',
+      lastMatchId: lastMatch?.id,
+      lastMatchStatus: lastMatch?.status,
+      source: 'static-knockout' as const,
+    };
+  });
 }
 
 export default async function handler(
@@ -369,58 +389,57 @@ export default async function handler(
       ? rawEndDate
       : WORLD_CUP_FINAL_DATE;
 
+  // ── 第一步：尝试 ESPN World Cup ─────────────────────────
   try {
     const dates = enumerateDates(startDate, endDate);
 
     const allEventsNested = await Promise.all(
       dates.map(date =>
         fetchEspnEventsByDate(date).catch(error => {
-          console.error(
-            `[world-cup-survivors] ${date} failed:`,
-            error
-          );
+          console.error(`[world-cup-survivors] ESPN ${date} failed:`, error);
           return [] as MatchEvent[];
         })
       )
     );
 
     const events = allEventsNested.flat();
-    const teams = computeSurvivors(events);
+    const teams = computeSurvivorsFromEspn(events);
 
-    if (teams.length === 0) {
+    // ESPN 有有效数据 → 直接返回
+    if (teams.length > 0) {
       return res.status(200).json({
-        teams: [],
-        error:
-          '剩余球队数据暂不可用：世界杯赛程数据源暂未返回可计算结果。',
+        teams,
+        error: null,
         lastUpdated: new Date().toISOString(),
         debug: {
           startDate,
           endDate,
           eventCount: events.length,
+          teamCount: teams.length,
           source: 'espn-worldcup',
         },
       });
     }
-
-    return res.status(200).json({
-      teams,
-      error: null,
-      lastUpdated: new Date().toISOString(),
-      debug: {
-        startDate,
-        endDate,
-        eventCount: events.length,
-        teamCount: teams.length,
-        source: 'espn-worldcup',
-      },
-    });
-  } catch (error: any) {
-    console.error('[world-cup-survivors] API error:', error);
-
-    return res.status(200).json({
-      teams: [],
-      error: `剩余球队数据暂不可用：${error.message}`,
-      lastUpdated: new Date().toISOString(),
-    });
+  } catch (espnError: any) {
+    console.warn(
+      `[world-cup-survivors] ESPN 全部失败，使用本地兜底数据:`,
+      espnError.message
+    );
   }
+
+  // ── 第二步：ESPN 无数据 → 使用本地兜底数据 ─────────────
+  const fallbackTeams = computeSurvivorsFromLocalFallback();
+
+  return res.status(200).json({
+    teams: fallbackTeams,
+    error: null,
+    lastUpdated: new Date().toISOString(),
+    debug: {
+      startDate,
+      endDate,
+      teamCount: fallbackTeams.length,
+      source: 'static-knockout',
+      note: 'ESPN 数据源无返回，使用本地淘汰赛兜底数据',
+    },
+  });
 }
