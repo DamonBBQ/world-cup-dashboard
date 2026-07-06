@@ -239,6 +239,7 @@ export function formatLastUpdated(lastUpdated: string | null): string {
  */
 export function getDataSourceColor(dataSource: string): string {
   switch (dataSource) {
+    case 'espn-worldcup':
     case 'api-football':
     case 'football-data':
       return 'text-green-600'; // 真实数据
@@ -253,13 +254,15 @@ export function getDataSourceColor(dataSource: string): string {
  */
 export function getDataSourceLabel(dataSource: string): string {
   switch (dataSource) {
+    case 'espn-worldcup':
+      return 'ESPN World Cup 实时数据';
     case 'api-football':
       return 'API-FOOTBALL 实时数据';
     case 'football-data':
       return 'football-data.org 实时数据';
     case 'none':
     default:
-      return '实时数据暂不可用';
+      return '世界杯实时数据暂不可用';
   }
 }
 
@@ -267,5 +270,10 @@ export function getDataSourceLabel(dataSource: string): string {
  * 检查是否有真实数据
  */
 export function hasRealData(dataSource: string, matches: any[]): boolean {
-  return (dataSource === 'api-football' || dataSource === 'football-data') && matches.length > 0;
+  return (
+    (dataSource === 'espn-worldcup' ||
+      dataSource === 'api-football' ||
+      dataSource === 'football-data') &&
+    matches.length > 0
+  );
 }
