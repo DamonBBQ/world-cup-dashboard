@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { StandardMatch } from '../hooks/useLiveScores';
 import { getTeamRating, buildSyntheticOddsForMatches } from '../services/localData';
 import {
   generateExampleTickets,
@@ -75,6 +76,38 @@ const RISK_BADGE_CLASS: Record<string, string> = {
   高: 'bg-red-100 text-red-700',
 };
 
+// ── 纯函数：API 数据 → SelectableMatch（组件外部，无 TDZ 问题） ──
+function convertToSelectableMatches(matches: StandardMatch[]): SelectableMatch[] {
+  const valid = matches.filter(m => {
+    if (!m?.homeTeam?.name || !m?.awayTeam?.name) return false;
+    if (m.homeTeam.name === 'None' || m.awayTeam.name === 'None') return false;
+    if (m.homeTeam.name === 'TBD' || m.awayTeam.name === 'TBD') return false;
+    return true;
+  });
+
+  return valid.map(m => {
+    let rawStatus = 'TIMED';
+    if (m.status === 'LIVE') rawStatus = 'IN_PLAY';
+    else if (m.status === 'FINISHED') rawStatus = 'FINISHED';
+
+    const sortKey = `${m.date || ''} ${m.time || ''}`;
+
+    return {
+      id: m.id,
+      home: m.homeTeam.name,
+      away: m.awayTeam.name,
+      homeRating: getTeamRating(m.homeTeam.name),
+      awayRating: getTeamRating(m.awayTeam.name),
+      rawStatus,
+      competition: m.competition || 'WC',
+      date: m.date,
+      time: m.time,
+      stage: m.stage || 'Unknown',
+      sortKey,
+    };
+  });
+}
+
 export default function SplitTicketBuilder({
   liveMatches: externalMatches,
   liveLoading: externalLoading,
@@ -92,14 +125,13 @@ export default function SplitTicketBuilder({
   const [savedGroupId, setSavedGroupId] = useState<string | null>(null);
   const [riskPreference, setRiskPreference] = useState<'conservative' | 'moderate' | 'aggressive'>('moderate');
   const [selectedMatchIds, setSelectedMatchIds] = useState<Set<string>>(new Set());
-  /** 派生状态：从 externalMatches 转换并按北京时间 sortKey 排序 */
-  const allMatches: SelectableMatch[] = (() => {
+  /** 派生状态：externalMatches → SelectableMatch[]，按北京时间 sortKey 排序 */
+  const allMatches: SelectableMatch[] = useMemo(() => {
     if (!externalMatches || externalMatches.length === 0) return [];
-    const converted = convertToSelectableMatches(externalMatches);
-    return converted.sort((a, b) =>
+    return convertToSelectableMatches(externalMatches).sort((a, b) =>
       (a.sortKey || '').localeCompare(b.sortKey || '')
     );
-  })();
+  }, [externalMatches]);
 
   /** 已选中的比赛 */
   const selectedMatches: SelectableMatch[] = allMatches.filter(m => selectedMatchIds.has(m.id));
@@ -112,40 +144,6 @@ export default function SplitTicketBuilder({
   const [filteredOutCount, setFilteredOutCount] = useState(0);
   /** 合成赔率表（比赛加载后构建） */
   const [oddsMap, setOddsMap] = useState<Record<string, string | undefined>>({});
-
-  /**
-   * 将实时 API 数据转换为 SelectableMatch 格式
-   */
-  const convertToSelectableMatches = useCallback((matches: any[]): SelectableMatch[] => {
-    const valid = matches.filter(m => {
-      if (!m?.homeTeam?.name || !m?.awayTeam?.name) return false;
-      if (m.homeTeam.name === 'None' || m.awayTeam.name === 'None') return false;
-      if (m.homeTeam.name === 'TBD' || m.awayTeam.name === 'TBD') return false;
-      return true;
-    });
-
-    return valid.map(m => {
-      let rawStatus = 'TIMED';
-      if (m.status === 'LIVE') rawStatus = 'IN_PLAY';
-      else if (m.status === 'FINISHED') rawStatus = 'FINISHED';
-
-      const sortKey = `${m.date} ${m.time}`;
-
-      return {
-        id: m.id,
-        home: m.homeTeam.name,
-        away: m.awayTeam.name,
-        homeRating: getTeamRating(m.homeTeam.name),
-        awayRating: getTeamRating(m.awayTeam.name),
-        rawStatus,
-        competition: m.competition || 'WC',
-        date: m.date,
-        time: m.time,
-        stage: m.stage || 'Unknown',
-        sortKey,
-      };
-    });
-  }, []);
 
   // 构建合成赔率（外部数据变化时）
   useEffect(() => {
@@ -180,7 +178,7 @@ export default function SplitTicketBuilder({
         return prev;
       });
     }
-  }, [externalMatches, externalLoading, externalError, convertToSelectableMatches]);
+  }, [externalMatches, externalLoading, externalError]);
 
   const handleRefresh = () => {
     if (externalRefresh) {
