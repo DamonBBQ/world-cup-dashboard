@@ -51,6 +51,14 @@ export interface SelectableMatch {
   rawStatus: string;
   competition?: string;
   utcDate?: string;
+  /** 北京时间日期 YYYY-MM-DD */
+  date?: string;
+  /** 北京时间时间 HH:MM */
+  time?: string;
+  /** 比赛阶段 */
+  stage?: string;
+  /** 北京时间字符串排序键 `${date} ${time}` */
+  sortKey?: string;
 }
 
 export interface TicketLeg {

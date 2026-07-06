@@ -1,30 +1,108 @@
-import { useState, useMemo } from 'react';
-import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
-import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
-import { isWorldCupCompetitionName } from '../utils/worldCupFilter';
+import { useState, useEffect, useCallback } from 'react';
+import { type StandardMatch } from '../hooks/useLiveScores';
+import { formatLastUpdated, getDataSourceColor, getDataSourceLabel } from '../hooks/useLiveScores';
 import SplitTicketBuilder from './SplitTicketBuilder';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 工具函数
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 返回北京时区日期字符串 YYYY-MM-DD，offsetDays 相对今天偏移天数 */
+function getBeijingDateString(offsetDays = 0): string {
+  const now = new Date();
+  const target = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000);
+  return target.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+}
+
+/** 拉取 0~N 天内所有世界杯比赛，合并去重并按北京时间排序 */
+async function fetchTicketSchedule(days = 14): Promise<StandardMatch[]> {
+  const dates = Array.from({ length: days + 1 }, (_, i) => getBeijingDateString(i));
+
+  const results = await Promise.all(
+    dates.map(async date => {
+      try {
+        const res = await fetch(`/api/live-scores?date=${date}&_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (!res.ok) return [];
+        const data = await res.json();
+        return Array.isArray(data.matches) ? data.matches : [];
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  // 合并 + 去重
+  const map = new Map<string, StandardMatch>();
+  results.flat().forEach(match => {
+    if (!map.has(match.id)) map.set(match.id, match);
+  });
+
+  // 按北京时间 date + time 排序
+  return Array.from(map.values()).sort((a, b) =>
+    `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 组件
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function TicketBuilder() {
   const [activeTab, setActiveTab] = useState<'smart' | 'split' | 'history'>('split');
-  
-  // 获取今天的日期
-  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-  
-  // 使用实时数据 Hook
-  const { matches, loading, error, dataSource, lastUpdated, refetch } = useLiveScores({
-    date: today,
-    autoRefresh: true,
-  });
-  
-  // 前端防御过滤：只保留世界杯比赛
-  const worldCupMatches = useMemo(
-    () => matches.filter(match => isWorldCupCompetitionName(match.competition)),
-    [matches]
-  );
-  
-  // 检查是否有真实数据
-  const hasReal = hasRealData(dataSource, worldCupMatches);
-  
+
+  // ── 14 天赛程池 ──
+  const [ticketScheduleMatches, setTicketScheduleMatches] = useState<StandardMatch[]>([]);
+  const [ticketScheduleLoading, setTicketScheduleLoading] = useState(true);
+  const [ticketScheduleError, setTicketScheduleError] = useState<string | null>(null);
+
+  // ── 首页今日数据（仅用于展示数据来源标签） ──
+  const [homeDataSource, setHomeDataSource] = useState('none');
+  const [homeLastUpdated, setHomeLastUpdated] = useState<string | null>(null);
+  const [homeLoading, setHomeLoading] = useState(true);
+
+  const todayStr = getBeijingDateString(0);
+
+  // 拉取首页今日数据（仅用于显示来源标签）
+  useEffect(() => {
+    let cancelled = false;
+    setHomeLoading(true);
+    fetch(`/api/live-scores?date=${todayStr}&_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (!cancelled) {
+          setHomeDataSource(data.dataSource || 'none');
+          setHomeLastUpdated(data.lastUpdated || null);
+          setHomeLoading(false);
+        }
+      })
+      .catch(() => { if (!cancelled) setHomeLoading(false); });
+    return () => { cancelled = true; };
+  }, [todayStr]);
+
+  // 拉取 14 天赛程池
+  const refreshTicketSchedule = useCallback(async () => {
+    setTicketScheduleLoading(true);
+    setTicketScheduleError(null);
+    try {
+      const matches = await fetchTicketSchedule(14);
+      setTicketScheduleMatches(matches);
+    } catch (err: any) {
+      setTicketScheduleError(err?.message || '拉取赛程失败');
+    } finally {
+      setTicketScheduleLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshTicketSchedule();
+  }, [refreshTicketSchedule]);
+
   return (
     <section id="tickets" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
       <div className="mb-8">
@@ -36,37 +114,40 @@ export default function TicketBuilder() {
             <h2 className="text-2xl font-bold text-green-900">智能出票系统</h2>
             <div className="flex items-center gap-2 text-sm">
               <span className="text-gray-500">数据来源：</span>
-              <span className={`font-medium ${getDataSourceColor(dataSource)}`}>
-                {getDataSourceLabel(dataSource)}
+              <span className={`font-medium ${getDataSourceColor(homeDataSource)}`}>
+                {homeLoading ? '加载中...' : getDataSourceLabel(homeDataSource)}
               </span>
             </div>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-          <span>最后更新：{formatLastUpdated(lastUpdated)}</span>
+          <span>
+            赛程池最后更新：
+            {homeLastUpdated ? formatLastUpdated(homeLastUpdated) : '—'}
+          </span>
           <button
-            onClick={refetch}
-            disabled={loading}
+            onClick={refreshTicketSchedule}
+            disabled={ticketScheduleLoading}
             className="px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 text-xs"
           >
-            {loading ? '刷新中...' : '刷新'}
+            {ticketScheduleLoading ? '刷新中...' : '刷新赛程'}
           </button>
         </div>
-        
-        {error && (
+
+        {ticketScheduleError && (
           <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
-            {error}
+            {ticketScheduleError}
           </div>
         )}
-        
-        {!hasReal && !loading && (
-          <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-            实时数据暂不可用。请检查 API Key 配置、数据套餐权限，或当天是否有比赛。
+
+        {ticketScheduleMatches.length > 0 && (
+          <div className="mt-2 text-xs text-gray-400">
+            赛程池：{ticketScheduleMatches.length} 场（今天起 14 天）
           </div>
         )}
       </div>
-      
+
       {/* Tab 切换 */}
       <div className="flex gap-2 mb-6">
         {[
@@ -87,41 +168,29 @@ export default function TicketBuilder() {
           </button>
         ))}
       </div>
-      
-      {/* 加载状态 */}
-      {loading && matches.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto mb-4"></div>
-          <p>加载实时数据中...</p>
+
+      {/* Tab 内容 */}
+      {activeTab === 'split' && (
+        <SplitTicketBuilder
+          liveMatches={ticketScheduleMatches}
+          liveLoading={ticketScheduleLoading}
+          liveError={ticketScheduleError}
+          onRefreshMatches={refreshTicketSchedule}
+        />
+      )}
+
+      {activeTab === 'smart' && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-lg font-semibold mb-4">智能生成票组</h3>
+          <p className="text-gray-600">功能开发中...</p>
         </div>
-      ) : (
-        <>
-          {/* 小额多票拆单 */}
-          {activeTab === 'split' && (
-            <SplitTicketBuilder
-              liveMatches={worldCupMatches}
-              liveLoading={loading}
-              liveError={error}
-              onRefreshMatches={refetch}
-            />
-          )}
-          
-          {/* 智能生成 */}
-          {activeTab === 'smart' && (
-            <div className="bg-white rounded-2xl shadow p-6">
-              <h3 className="text-lg font-semibold mb-4">智能生成票组</h3>
-              <p className="text-gray-600">功能开发中...</p>
-            </div>
-          )}
-          
-          {/* 历史票组 */}
-          {activeTab === 'history' && (
-            <div className="bg-white rounded-2xl shadow p-6">
-              <h3 className="text-lg font-semibold mb-4">历史票组</h3>
-              <p className="text-gray-600">功能开发中...</p>
-            </div>
-          )}
-        </>
+      )}
+
+      {activeTab === 'history' && (
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-lg font-semibold mb-4">历史票组</h3>
+          <p className="text-gray-600">功能开发中...</p>
+        </div>
       )}
     </section>
   );

@@ -268,6 +268,10 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     elapsed: null,
   },
 
+  // ══════════════════════════════════════════════════════
+  // Round of 16 — 下半区 8 场
+  // ══════════════════════════════════════════════════════
+
   // R16-09 — 7月1日 22:00
   {
     id: 'r16-09',
@@ -320,8 +324,8 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     time: '03:00',
     competition: 'FIFA World Cup',
     stage: 'Round of 16',
-    homeTeam: { name: 'Ecuador', flag: '🇪🇨' },
-    awayTeam: { name: 'Australia', flag: '🇦🇺' },
+    homeTeam: { name: 'Australia', flag: '🇦🇺' },
+    awayTeam: { name: 'Ecuador', flag: '🇪🇨' },
     homeScore: 2,
     awayScore: 1,
     status: 'FINISHED',
@@ -335,10 +339,10 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     time: '22:00',
     competition: 'FIFA World Cup',
     stage: 'Round of 16',
-    homeTeam: { name: 'Canada', flag: '🇨🇦' },
-    awayTeam: { name: 'Poland', flag: '🇵🇱' },
+    homeTeam: { name: 'Poland', flag: '🇵🇱' },
+    awayTeam: { name: 'Canada', flag: '🇨🇦' },
     homeScore: 1,
-    awayScore: 0,
+    awayScore: 2,
     status: 'FINISHED',
     elapsed: null,
   },
@@ -350,10 +354,10 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     time: '23:59',
     competition: 'FIFA World Cup',
     stage: 'Round of 16',
-    homeTeam: { name: 'Serbia', flag: '🇷🇸' },
-    awayTeam: { name: 'Austria', flag: '🇦🇹' },
-    homeScore: 2,
-    awayScore: 1,
+    homeTeam: { name: 'Austria', flag: '🇦🇹' },
+    awayTeam: { name: 'Serbia', flag: '🇷🇸' },
+    homeScore: 1,
+    awayScore: 3,
     status: 'FINISHED',
     elapsed: null,
   },
@@ -367,7 +371,7 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     stage: 'Round of 16',
     homeTeam: { name: 'Morocco', flag: '🇲🇦' },
     awayTeam: { name: 'Peru', flag: '🇵🇪' },
-    homeScore: 1,
+    homeScore: 2,
     awayScore: 0,
     status: 'FINISHED',
     elapsed: null,
@@ -380,19 +384,27 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     time: '03:00',
     competition: 'FIFA World Cup',
     stage: 'Round of 16',
-    homeTeam: { name: 'United States', flag: '🇺🇸' },
-    awayTeam: { name: 'Ghana', flag: '🇬🇭' },
-    homeScore: 1,
-    awayScore: 0,
+    homeTeam: { name: 'Ghana', flag: '🇬🇭' },
+    awayTeam: { name: 'United States', flag: '🇺🇸' },
+    homeScore: 0,
+    awayScore: 2,
     status: 'FINISHED',
     elapsed: null,
   },
 
   // ══════════════════════════════════════════════════════
-  // Quarter-finals（未开始）
+  // Quarter-finals — 全部 8 场（NOT_STARTED）
+  // QF 路径：R16-01 胜者 Argentina vs R16-02 胜者 Spain（R16-02: Spain 胜 Morocco）
+  //          R16-03 胜者 Germany vs R16-04 胜者 France（R16-04: France 胜 Nigeria）
+  //          R16-06 胜者 England vs R16-09 胜者 Switzerland（R16-06: England 胜 Senegal）
+  //          R16-10 胜者 Colombia vs R16-15 胜者 Morocco（R16-10: Colombia 胜 SK）
+  //          R16-16 胜者 USA vs R16-13 胜者 Canada（R16-16: USA 胜 Ghana）
+  //          R16-14 胜者 Serbia vs R16-12 胜者 Australia（R16-14: Serbia 胜 Austria）
+  //          R16-05 胜者 Portugal vs R16-11 胜者 Belgium（R16-05: Portugal 胜 Mexico）
+  //          R16-07 胜者 Uruguay vs R16-08 胜者 Brazil（R16-08: Uruguay 胜 Brazil）
   // ══════════════════════════════════════════════════════
 
-  // QF-01 — 7月4日 00:00
+  // QF-01 — 7月4日 00:00（Argentina vs Spain）
   {
     id: 'qf-01',
     date: '2026-07-04',
@@ -407,7 +419,7 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     elapsed: null,
   },
 
-  // QF-02 — 7月4日 03:00
+  // QF-02 — 7月4日 03:00（France vs Germany）
   {
     id: 'qf-02',
     date: '2026-07-04',
@@ -415,14 +427,14 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
     homeTeam: { name: 'France', flag: '🇫🇷' },
-    awayTeam: { name: 'Portugal', flag: '🇵🇹' },
+    awayTeam: { name: 'Germany', flag: '🇩🇪' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',
     elapsed: null,
   },
 
-  // QF-03 — 7月5日 00:00
+  // QF-03 — 7月5日 00:00（England vs Norway）
   {
     id: 'qf-03',
     date: '2026-07-05',
@@ -430,29 +442,29 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
     homeTeam: { name: 'England', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿' },
-    awayTeam: { name: 'Uruguay', flag: '🇺🇾' },
+    awayTeam: { name: 'Norway', flag: '🇳🇴' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',
     elapsed: null,
   },
 
-  // QF-04 — 7月5日 03:00
+  // QF-04 — 7月5日 03:00（Colombia vs Morocco）
   {
     id: 'qf-04',
     date: '2026-07-05',
     time: '03:00',
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
-    homeTeam: { name: 'Switzerland', flag: '🇨🇭' },
-    awayTeam: { name: 'Belgium', flag: '🇧🇪' },
+    homeTeam: { name: 'Colombia', flag: '🇨🇴' },
+    awayTeam: { name: 'Morocco', flag: '🇲🇦' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',
     elapsed: null,
   },
 
-  // QF-05 — 7月5日 22:00
+  // QF-05 — 7月5日 22:00（USA vs Canada）
   {
     id: 'qf-05',
     date: '2026-07-05',
@@ -467,7 +479,7 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     elapsed: null,
   },
 
-  // QF-06 — 7月5日 23:59
+  // QF-06 — 7月5日 23:59（Serbia vs Australia）
   {
     id: 'qf-06',
     date: '2026-07-05',
@@ -475,37 +487,37 @@ const KNOCKOUT_FIXTURES: FallbackMatch[] = [
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
     homeTeam: { name: 'Serbia', flag: '🇷🇸' },
-    awayTeam: { name: 'Ecuador', flag: '🇪🇨' },
+    awayTeam: { name: 'Australia', flag: '🇦🇺' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',
     elapsed: null,
   },
 
-  // QF-07 — 7月6日 00:00
+  // QF-07 — 7月6日 00:00（Portugal vs Belgium）
   {
     id: 'qf-07',
     date: '2026-07-06',
     time: '00:00',
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
-    homeTeam: { name: 'Croatia', flag: '🇭🇷' },
-    awayTeam: { name: 'Colombia', flag: '🇨🇴' },
+    homeTeam: { name: 'Portugal', flag: '🇵🇹' },
+    awayTeam: { name: 'Belgium', flag: '🇧🇪' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',
     elapsed: null,
   },
 
-  // QF-08 — 7月6日 03:00
+  // QF-08 — 7月6日 03:00（Uruguay vs Brazil）
   {
     id: 'qf-08',
     date: '2026-07-06',
     time: '03:00',
     competition: 'FIFA World Cup',
     stage: 'Quarter-final',
-    homeTeam: { name: 'Germany', flag: '🇩🇪' },
-    awayTeam: { name: 'Austria', flag: '🇦🇹' },
+    homeTeam: { name: 'Uruguay', flag: '🇺🇾' },
+    awayTeam: { name: 'Brazil', flag: '🇧🇷' },
     homeScore: null,
     awayScore: null,
     status: 'NOT_STARTED',

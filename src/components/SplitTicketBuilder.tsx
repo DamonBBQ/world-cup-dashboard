@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState, useMemo } from 'react';
-import { getTeamRating, buildSyntheticOddsForMatches, getFullOddsMap } from '../services/localData';
-import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
+import { useCallback, useEffect, useState } from 'react';
+import { getTeamRating, buildSyntheticOddsForMatches } from '../services/localData';
 import {
   generateExampleTickets,
   generateSplitTickets,
@@ -8,14 +7,12 @@ import {
   analyzeTicketStructure,
   formatTicketTextForBetSlip,
   saveTicketGroupToLedger,
-  makeMatchId,
   getStatusLabel,
   buildGoalCenterProtection,
   getLocalValidationStatus,
   getLocalGoalReviews,
   saveLocalGoalReview,
   summarizeCorrections,
-  type AutoCorrection,
   type SplitTicket,
   type SelectableMatch,
   type SanitizedResult,
@@ -94,10 +91,18 @@ export default function SplitTicketBuilder({
   const [analysis, setAnalysis] = useState<ReturnType<typeof analyzeTicketStructure> | null>(null);
   const [savedGroupId, setSavedGroupId] = useState<string | null>(null);
   const [riskPreference, setRiskPreference] = useState<'conservative' | 'moderate' | 'aggressive'>('moderate');
-  const [availableMatches, setAvailableMatches] = useState<SelectableMatch[]>([]);
   const [selectedMatchIds, setSelectedMatchIds] = useState<Set<string>>(new Set());
-  /** 派生状态：始终从 selectedMatchIds + availableMatches 计算 */
-  const selectedMatches: SelectableMatch[] = availableMatches.filter(m => selectedMatchIds.has(m.id));
+  /** 派生状态：从 externalMatches 转换并按北京时间 sortKey 排序 */
+  const allMatches: SelectableMatch[] = (() => {
+    if (!externalMatches || externalMatches.length === 0) return [];
+    const converted = convertToSelectableMatches(externalMatches);
+    return converted.sort((a, b) =>
+      (a.sortKey || '').localeCompare(b.sortKey || '')
+    );
+  })();
+
+  /** 已选中的比赛 */
+  const selectedMatches: SelectableMatch[] = allMatches.filter(m => selectedMatchIds.has(m.id));
   const [result, setResult] = useState<SanitizedResult | null>(null);
 
   // ── 比赛加载状态 ──
@@ -111,86 +116,69 @@ export default function SplitTicketBuilder({
   /**
    * 将实时 API 数据转换为 SelectableMatch 格式
    */
-  const convertToSelectableMatches = useCallback((matches: StandardMatch[]): SelectableMatch[] => {
-    // 过滤无效对阵
+  const convertToSelectableMatches = useCallback((matches: any[]): SelectableMatch[] => {
     const valid = matches.filter(m => {
-      if (!m.homeTeam?.name || !m.awayTeam?.name) return false;
+      if (!m?.homeTeam?.name || !m?.awayTeam?.name) return false;
       if (m.homeTeam.name === 'None' || m.awayTeam.name === 'None') return false;
       if (m.homeTeam.name === 'TBD' || m.awayTeam.name === 'TBD') return false;
       return true;
     });
 
-    // 转换为 SelectableMatch
     return valid.map(m => {
-      const homeName = m.homeTeam.name;
-      const awayName = m.awayTeam.name;
-      
-      // 标准化状态
       let rawStatus = 'TIMED';
       if (m.status === 'LIVE') rawStatus = 'IN_PLAY';
       else if (m.status === 'FINISHED') rawStatus = 'FINISHED';
 
-      // 构建 ISO 日期时间
-      const utcDate = `${m.date}T${m.time}:00.000Z`;
+      const sortKey = `${m.date} ${m.time}`;
 
       return {
         id: m.id,
-        home: homeName,
-        away: awayName,
-        homeRating: getTeamRating(homeName),
-        awayRating: getTeamRating(awayName),
+        home: m.homeTeam.name,
+        away: m.awayTeam.name,
+        homeRating: getTeamRating(m.homeTeam.name),
+        awayRating: getTeamRating(m.awayTeam.name),
         rawStatus,
         competition: m.competition || 'WC',
-        utcDate,
+        date: m.date,
+        time: m.time,
+        stage: m.stage || 'Unknown',
+        sortKey,
       };
     });
   }, []);
 
-  /**
-   * 处理传入的实时数据
-   */
+  // 构建合成赔率（外部数据变化时）
   useEffect(() => {
     if (externalMatches && externalMatches.length > 0) {
-      // 使用传入的实时数据
-      const converted = convertToSelectableMatches(externalMatches);
-      
-      // 构建合成赔率
       const synthetic = buildSyntheticOddsForMatches(externalMatches as any);
       setOddsMap(synthetic);
-      
-      // 只保留赛前比赛（NOT_STARTED）
-      const preMatch = converted.filter(m => isPreMatchStatus(m.rawStatus));
-      
-      // 按时间排序
-      preMatch.sort((a, b) => new Date(a.utcDate || 0).getTime() - new Date(b.utcDate || 0).getTime());
-      
-      setAvailableMatches(preMatch);
-      setMatchesLoading(false);
+      setRawMatchCount(externalMatches.length);
+    }
+  }, [externalMatches]);
+
+  // 处理加载状态和错误
+  useEffect(() => {
+    if (externalLoading) {
+      setMatchesLoading(true);
+      return;
+    }
+    setMatchesLoading(false);
+
+    if (!externalMatches || externalMatches.length === 0) {
+      const msg = externalError || '暂无赛程数据，请检查 API 配置或稍后刷新';
+      setMatchesError(msg);
+    } else {
       setMatchesError(null);
-      setRawMatchCount(converted.length);
+      const converted = convertToSelectableMatches(externalMatches);
+      const preMatch = converted.filter(m => isPreMatchStatus(m.rawStatus));
       setFilteredOutCount(converted.length - preMatch.length);
-      
-      // 默认选中前 4 场
-      const defaultIds = preMatch.slice(0, 4).map(m => m.id);
-      setSelectedMatchIds(new Set(defaultIds));
-      
-      console.log('[SplitTicketBuilder] 使用实时数据:', {
-        total: converted.length,
-        preMatch: preMatch.length,
-        dataSource: 'live'
+      // 默认选中最近的 2~4 场赛前比赛
+      const defaultIds = preMatch.slice(0, Math.min(4, preMatch.length)).map(m => m.id);
+      setSelectedMatchIds(prev => {
+        // 只在初次加载时自动选中
+        if (prev.size === 0 && defaultIds.length > 0) return new Set(defaultIds);
+        return prev;
       });
-    } else if (!externalLoading && externalError) {
-      // 外部数据加载失败
-      setMatchesError(externalError);
-      setAvailableMatches([]);
-      setSelectedMatchIds(new Set());
-      setMatchesLoading(false);
-    } else if (!externalLoading && (!externalMatches || externalMatches.length === 0)) {
-      // 外部数据为空（没有真实数据）
-      setMatchesError('暂无实时数据，请检查 API Key 配置');
-      setAvailableMatches([]);
-      setSelectedMatchIds(new Set());
-      setMatchesLoading(false);
     }
   }, [externalMatches, externalLoading, externalError, convertToSelectableMatches]);
 
@@ -311,20 +299,30 @@ export default function SplitTicketBuilder({
       <div className="bg-card rounded-2xl border border-border p-6">
         <h3 className="font-bold text-primary mb-6">参数设置</h3>
 
-        {/* 可选比赛 */}
+        {/* 比赛日程选择器 */}
         <div className="mb-6">
-          <label className="block text-sm font-medium text-text-secondary mb-3">
-            选择参与组票的比赛
-          </label>
+          <div className="flex items-center justify-between mb-3">
+            <label className="block text-sm font-medium text-text-secondary">
+              选择参与组票的比赛
+            </label>
+            {allMatches.length > 0 && (
+              <span className="text-xs text-gray-400">
+                共 {allMatches.length} 场
+                {allMatches.filter(m => isPreMatchStatus(m.rawStatus)).length > 0 && (
+                  <>（{allMatches.filter(m => isPreMatchStatus(m.rawStatus)).length} 场待开）</>
+                )}
+              </span>
+            )}
+          </div>
+
           {matchesLoading ? (
-            <div className="text-sm text-text-secondary/60 py-2">正在加载比赛数据...</div>
-          ) : matchesError ? (
+            <div className="text-sm text-text-secondary/60 py-4 text-center">
+              正在加载赛程数据...
+            </div>
+          ) : matchesError && allMatches.length === 0 ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              <div className="font-semibold mb-1">暂无可选赛前比赛</div>
+              <div className="font-semibold mb-1">加载失败</div>
               <div className="text-xs leading-relaxed">{matchesError}</div>
-              <div className="mt-1 text-xs text-amber-600">
-                原始比赛数：{rawMatchCount}；被过滤比赛数：{filteredOutCount}
-              </div>
               <button
                 onClick={handleRefresh}
                 className="mt-2 px-3 py-1 text-xs border border-amber-400 text-amber-700 rounded hover:bg-amber-100 transition-colors"
@@ -332,9 +330,9 @@ export default function SplitTicketBuilder({
                 重新加载
               </button>
             </div>
-          ) : availableMatches.length === 0 ? (
+          ) : allMatches.length === 0 ? (
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-              当前没有待开比赛可用于赛前模拟。进行中或已结束比赛仅可用于复盘。
+              当前没有可选比赛。
               <button
                 onClick={handleRefresh}
                 className="ml-2 px-3 py-1 text-xs border border-gray-400 text-gray-600 rounded hover:bg-gray-100 transition-colors"
@@ -343,46 +341,122 @@ export default function SplitTicketBuilder({
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {availableMatches.map((m) => {
-                const selected = selectedMatchIds.has(m.id);
-                const isPreMatch = isPreMatchStatus(m.rawStatus);
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => {
-                      if (!isPreMatch) return;
-                      const next = new Set(selectedMatchIds);
-                      if (selected) next.delete(m.id);
-                      else next.add(m.id);
-                      setSelectedMatchIds(next);
-                    }}
-                    className={`px-3 py-2 rounded-lg text-sm border transition-colors text-left ${
-                      !isPreMatch
-                        ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed opacity-60'
-                        : selected
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-card text-text-secondary border-border hover:border-primary/40'
-                    }`}
-                  >
-                    <div>
-                      <span className="font-medium">{m.home}</span>
-                      <span className="mx-0.5 opacity-60">vs</span>
-                      <span className="font-medium">{m.away}</span>
+            // 按日期分组展示
+            <div className="space-y-4">
+              {(() => {
+                // 按 date 分组
+                const groups: Record<string, SelectableMatch[]> = {};
+                allMatches.forEach(m => {
+                  const d = m.date || '未知日期';
+                  if (!groups[d]) groups[d] = [];
+                  groups[d].push(m);
+                });
+                const sortedDates = Object.keys(groups).sort();
+
+                return sortedDates.map(date => {
+                  const dayMatches = groups[date];
+                  const preMatchCount = dayMatches.filter(m => isPreMatchStatus(m.rawStatus)).length;
+                  const selectedCount = dayMatches.filter(m => selectedMatchIds.has(m.id)).length;
+
+                  return (
+                    <div key={date} className="border border-border rounded-xl overflow-hidden">
+                      {/* 日期标题栏 */}
+                      <div className="bg-bg px-4 py-2 flex items-center justify-between">
+                        <span className="font-semibold text-primary text-sm">{date}</span>
+                        <div className="flex items-center gap-2 text-xs text-text-secondary">
+                          {preMatchCount > 0 && (
+                            <span className="text-green-600">{preMatchCount} 场待开</span>
+                          )}
+                          {selectedCount > 0 && (
+                            <span className="bg-primary text-white px-1.5 py-0.5 rounded">
+                              已选 {selectedCount}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 比赛行 */}
+                      <div className="divide-y divide-border/50">
+                        {dayMatches.map(m => {
+                          const selected = selectedMatchIds.has(m.id);
+                          const isPre = isPreMatchStatus(m.rawStatus);
+
+                          return (
+                            <div
+                              key={m.id}
+                              className={`flex items-center gap-3 px-4 py-2.5 transition-colors ${
+                                !isPre
+                                  ? 'bg-gray-50 opacity-60'
+                                  : selected
+                                  ? 'bg-primary/5'
+                                  : 'bg-white hover:bg-bg'
+                              }`}
+                            >
+                              {/* 勾选框 */}
+                              <input
+                                type="checkbox"
+                                id={`match-${m.id}`}
+                                checked={selected}
+                                disabled={!isPre}
+                                onChange={() => {
+                                  const next = new Set(selectedMatchIds);
+                                  if (selected) {
+                                    next.delete(m.id);
+                                  } else {
+                                    next.add(m.id);
+                                  }
+                                  setSelectedMatchIds(next);
+                                }}
+                                className="w-4 h-4 accent-primary shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                              />
+
+                              {/* 阶段标签 */}
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium shrink-0 w-20 text-center truncate"
+                                title={m.stage}>
+                                {m.stage}
+                              </span>
+
+                              {/* 时间 */}
+                              <span className="text-xs text-gray-500 shrink-0 w-12">{m.time || '--:--'}</span>
+
+                              {/* 对阵 */}
+                              <label
+                                htmlFor={`match-${m.id}`}
+                                className={`flex-1 text-sm cursor-pointer ${!isPre ? 'cursor-not-allowed' : ''}`}
+                              >
+                                <span className="font-medium text-primary">{m.home}</span>
+                                <span className="mx-1 text-gray-400">vs</span>
+                                <span className="font-medium text-primary">{m.away}</span>
+                              </label>
+
+                              {/* 状态 */}
+                              <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                                STATUS_BADGE_CLASS[m.rawStatus] || 'bg-gray-100 text-gray-500'
+                              }`}>
+                                {getStatusLabel(m.rawStatus)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="mt-1">
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${STATUS_BADGE_CLASS[m.rawStatus] || 'bg-gray-100 text-gray-500'}`}>
-                        {getStatusLabel(m.rawStatus)}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
-          <div className="text-xs text-text-secondary/60 mt-2">
-            仅「待开」状态的比赛可用于赛前模拟票组。「进行中」「已结束」仅供复盘。
-          </div>
+
+          {allMatches.length > 0 && (
+            <div className="text-xs text-text-secondary/60 mt-3 flex items-center justify-between">
+              <span>
+                已选 {selectedMatchIds.size} 场（至少需 2 场）
+                {selectedMatchIds.size < 2 && selectedMatchIds.size > 0 && (
+                  <span className="text-amber-600 ml-1">还需 {2 - selectedMatchIds.size} 场</span>
+                )}
+              </span>
+              <span>仅「待开」可勾选；「进行中」「已结束」仅供复盘参考</span>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
