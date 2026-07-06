@@ -3,7 +3,7 @@ import {
   KNOCKOUT_FIXTURES,
   computeSurvivorsFromFallback,
   type FallbackMatch,
-} from './_world-cup-2026-fallback';
+} from './_world-cup-2026-fallback.js';
 
 interface SurvivorTeam {
   name: string;

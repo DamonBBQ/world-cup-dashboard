@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { KNOCKOUT_FIXTURES } from './_world-cup-2026-fallback';
+import { KNOCKOUT_FIXTURES } from './_world-cup-2026-fallback.js';
 
 /**
  * 标准化比赛数据结构
