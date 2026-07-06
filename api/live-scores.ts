@@ -898,6 +898,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
+  // 强制类型收窄：此时 date 必定是 string
+  const queryDate: string = date as string;
+
   const provider = process.env.LIVE_SCORE_PROVIDER || 'espn-worldcup';
 
   let matches: StandardMatch[] = [];
@@ -915,13 +918,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let result: ProviderResult;
 
     if (name === 'espn-worldcup') {
-      result = await fetchFromEspnWorldCup(date);
+      result = await fetchFromEspnWorldCup(queryDate);
       espnRawCount = result.rawCount || 0;
     } else if (name === 'football-data') {
-      result = await fetchFromFootballData(date);
+      result = await fetchFromFootballData(queryDate);
       footballDataRawCount = result.rawCount || 0;
     } else if (name === 'api-football') {
-      result = await fetchFromApiFootball(date);
+      result = await fetchFromApiFootball(queryDate);
       apiFootballRawCount = result.rawCount || 0;
     } else {
       return false;
@@ -971,7 +974,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const debug = {
       provider,
       providerOrder,
-      requestedDate: date,
+      requestedDate: queryDate,
       timezone: 'Asia/Shanghai',
       worldCupSeason: WORLD_CUP_SEASON,
       worldCupApiFootballLeagueId: WORLD_CUP_API_FOOTBALL_LEAGUE_ID,

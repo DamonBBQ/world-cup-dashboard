@@ -21,8 +21,9 @@ interface MatchEvent {
   loserName: string | null;
 }
 
+// 从世界杯开幕日（小�组赛第一天）开始，确保淘汰推断有完整数据
 const WORLD_CUP_KNOCKOUT_START =
-  process.env.WORLD_CUP_KNOCKOUT_START || '2026-06-28';
+  process.env.WORLD_CUP_KNOCKOUT_START || '2026-06-11';
 
 const WORLD_CUP_FINAL_DATE =
   process.env.WORLD_CUP_FINAL_DATE || '2026-07-19';
@@ -355,14 +356,17 @@ export default async function handler(
     });
   }
 
-  const startDate =
-    typeof req.query.startDate === 'string'
-      ? req.query.startDate
+  const rawStartDate = req.query.startDate;
+  const rawEndDate = req.query.endDate;
+
+  const startDate: string =
+    typeof rawStartDate === 'string' && rawStartDate.length === 10
+      ? rawStartDate
       : WORLD_CUP_KNOCKOUT_START;
 
-  const endDate =
-    typeof req.query.endDate === 'string'
-      ? req.query.endDate
+  const endDate: string =
+    typeof rawEndDate === 'string' && rawEndDate.length === 10
+      ? rawEndDate
       : WORLD_CUP_FINAL_DATE;
 
   try {
