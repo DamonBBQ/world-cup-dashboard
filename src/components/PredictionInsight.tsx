@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
 import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
+import { isWorldCupCompetitionName } from '../utils/worldCupFilter';
 
 interface DisplayMatch {
   id: string;
@@ -79,8 +80,13 @@ export default function PredictionInsight() {
     autoRefresh: true,
   });
   
-  // 转换为 DisplayMatch
-  const displayMatches = useMemo(() => matches.map(convertToDisplayMatch), [matches]);
+  // 转换为 DisplayMatch，并做前端防御过滤
+  const displayMatches = useMemo(() =>
+    matches
+      .filter(match => isWorldCupCompetitionName(match.competition))
+      .map(convertToDisplayMatch),
+    [matches]
+  );
   
   // 过滤掉对阵未确定的比赛
   const validMatches = displayMatches.filter(m => 

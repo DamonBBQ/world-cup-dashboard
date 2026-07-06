@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
 import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
+import { isWorldCupCompetitionName } from '../utils/worldCupFilter';
 
 // 状态标签映射
 const STATUS_LABELS: Record<string, string> = {
@@ -154,8 +155,10 @@ export default function MatchBoard() {
     autoRefresh: true,
   });
   
-  // 转换为 DisplayMatch
-  const displayMatches = matches.map(convertToDisplayMatch);
+  // 转换为 DisplayMatch，并做前端防御过滤
+  const displayMatches = matches
+    .filter(match => isWorldCupCompetitionName(match.competition))
+    .map(convertToDisplayMatch);
   
   const filters: { id: FilterType; label: string }[] = [
     { id: 'all', label: '全部' },

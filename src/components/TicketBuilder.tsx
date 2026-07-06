@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
 import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
+import { isWorldCupCompetitionName } from '../utils/worldCupFilter';
 import SplitTicketBuilder from './SplitTicketBuilder';
 
 export default function TicketBuilder() {
@@ -15,8 +16,14 @@ export default function TicketBuilder() {
     autoRefresh: true,
   });
   
+  // 前端防御过滤：只保留世界杯比赛
+  const worldCupMatches = useMemo(
+    () => matches.filter(match => isWorldCupCompetitionName(match.competition)),
+    [matches]
+  );
+  
   // 检查是否有真实数据
-  const hasReal = hasRealData(dataSource, matches);
+  const hasReal = hasRealData(dataSource, worldCupMatches);
   
   return (
     <section id="tickets" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
@@ -92,7 +99,7 @@ export default function TicketBuilder() {
           {/* 小额多票拆单 */}
           {activeTab === 'split' && (
             <SplitTicketBuilder
-              liveMatches={matches}
+              liveMatches={worldCupMatches}
               liveLoading={loading}
               liveError={error}
               onRefreshMatches={refetch}
