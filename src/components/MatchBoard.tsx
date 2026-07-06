@@ -147,9 +147,35 @@ function generateAnalysis(match: StandardMatch): string {
 
 export default function MatchBoard() {
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }));
+  
+  // 获取北京时间今天的 UTC 日期字符串（用于 API 查询）
+  const getBeijingTodayUTC = () => {
+    const now = new Date();
+    // 北京时间 = UTC + 8小时
+    const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+    return beijingNow.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
+  };
+  
+  // 获取北京时间某个日期的 UTC 日期（用于 API 查询）
+  // 北京时间 00:00-07:59 对应 UTC 前一天
+  const getBeijingDateToUTC = (beijingDate: Date) => {
+    const beijingDayStart = new Date(beijingDate);
+    beijingDayStart.setHours(0, 0, 0, 0);
+    // 转换为 UTC
+    const utcDayStart = new Date(beijingDayStart.getTime() - 8 * 60 * 60 * 1000);
+    return utcDayStart.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
+  };
+  
+  // 初始值：北京时间今天的 UTC 日期
+  const [selectedDate, setSelectedDate] = useState(() => {
+    return getBeijingTodayUTC();
+  });
+  
+  // selectedDate 是 UTC 日期，转换为北京时间显示用
+  const selectedBeijingDate = new Date(new Date(selectedDate + 'T00:00:00Z').getTime() + 8 * 60 * 60 * 1000);
   
   // 使用实时数据 Hook
+  // date 参数使用 UTC 日期（selectedDate），ESPN API 接受 UTC 日期
   const { matches, loading, error, dataSource, lastUpdated, refetch } = useLiveScores({
     date: selectedDate,
     autoRefresh: true,
@@ -173,12 +199,13 @@ export default function MatchBoard() {
     return true;
   });
   
-  // 统计
-  const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-  const todayMatches = displayMatches.filter(m => m.date === todayStr);
-  const liveCount = todayMatches.filter(m => m.status === 'live').length;
-  const finishedCount = todayMatches.filter(m => m.status === 'finished').length;
-  const upcomingCount = todayMatches.filter(m => m.status === 'upcoming').length;
+  // 统计：基于 selectedDate（UTC 日期）
+  // 北京时间 00:00-07:59 的比赛在 UTC 前一天，所以 selectedDate 对应北京时间 selectedBeijingDate
+  const selectedDateMatches = displayMatches.filter(m => m.date === selectedDate);
+  const liveCount = selectedDateMatches.filter(m => m.status === 'live').length;
+  const finishedCount = selectedDateMatches.filter(m => m.status === 'finished').length;
+  const upcomingCount = selectedDateMatches.filter(m => m.status === 'upcoming').length;
+  const totalMatches = selectedDateMatches.length;
   
   // 检查是否有真实数据
   const hasReal = hasRealData(dataSource, matches);
@@ -278,8 +305,8 @@ export default function MatchBoard() {
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         {[
-          { label: '今日比赛', value: todayMatches.length, color: 'text-green-700', bg: 'bg-green-50' },
-          { label: '进行中', value: liveCount, color: 'text-red-700', bg: 'bg-red-50' },
+          { label: '当日比赛', value: totalMatches, color: 'text-green-700', bg: 'bg-green-50' },
+          { label: '进行中', value: liveCount, color: 'text-red-700', bg: 'bg-red-50', warn: liveCount > 0 && totalMatches === 0 },
           { label: '已结束', value: finishedCount, color: 'text-gray-700', bg: 'bg-gray-50' },
           { label: '未开始', value: upcomingCount, color: 'text-blue-700', bg: 'bg-blue-50' },
         ].map(stat => (
@@ -310,20 +337,30 @@ export default function MatchBoard() {
       {/* 日期选择器 */}
       <div className="flex items-center gap-2 mb-6 overflow-x-auto">
         {['昨天', '今天', '明天'].map((label, idx) => {
-          const d = new Date();
-          d.setDate(d.getDate() + (idx - 1));
-          const dateStr = d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+          // 计算北京时间基准日期
+          const beijingBase = new Date();
+          const beijingNow = new Date(beijingBase.getTime() + 8 * 60 * 60 * 1000);
+          const beijingDay = new Date(beijingNow);
+          beijingDay.setDate(beijingNow.getDate() + (idx - 1));
+          beijingDay.setHours(0, 0, 0, 0);
+          
+          // 北京时间该天的 UTC 日期（用于 API 查询）
+          const utcDateStr = beijingDay.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
+          
+          // 北京时间该天的显示格式
+          const displayStr = beijingDay.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+          
           return (
             <button
               key={label}
-              onClick={() => setSelectedDate(dateStr)}
+              onClick={() => setSelectedDate(utcDateStr)}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                selectedDate === dateStr
+                selectedDate === utcDateStr
                   ? 'bg-green-600 text-white'
                   : 'bg-white text-gray-600 border border-gray-200'
               }`}
             >
-              {label} ({dateStr.slice(5)})
+              {label} ({displayStr.slice(5)})
             </button>
           );
         })}
