@@ -3,6 +3,33 @@ import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
 import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
 import { isWorldCupCompetitionName } from '../utils/worldCupFilter';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 工具函数
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 返回北京时区日期字符串 YYYY-MM-DD，offsetDays 相对今天偏移天数 */
+function getBeijingDateString(offsetDays = 0): string {
+  const now = new Date();
+  const target = new Date(now.getTime() + offsetDays * 24 * 60 * 60 * 1000);
+  return target.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+}
+
+/** 队徽组件：区分 emoji 和 URL */
+function TeamLogo({ value, alt }: { value?: string; alt: string }) {
+  if (!value) return null;
+  if (/^https?:\/\//.test(value)) {
+    return (
+      <img
+        src={value}
+        alt={alt}
+        className="w-8 h-8 object-contain mx-auto mt-2"
+        loading="lazy"
+      />
+    );
+  }
+  return <span className="text-2xl">{value}</span>;
+}
+
 // 状态标签映射
 const STATUS_LABELS: Record<string, string> = {
   upcoming: '未开始',
@@ -23,10 +50,10 @@ type FilterType = 'all' | 'upcoming' | 'live' | 'finished';
  * 将 API 返回的 StandardMatch 转换为组件需要的 DisplayMatch
  */
 function convertToDisplayMatch(match: StandardMatch): any {
-  const status: 'upcoming' | 'live' | 'finished' = 
-    match.status === 'NOT_STARTED' ? 'upcoming' : 
+  const status: 'upcoming' | 'live' | 'finished' =
+    match.status === 'NOT_STARTED' ? 'upcoming' :
     match.status === 'LIVE' ? 'live' : 'finished';
-  
+
   return {
     id: match.id,
     date: match.date,
@@ -59,7 +86,7 @@ function convertToDisplayMatch(match: StandardMatch): any {
 
 function mapStage(stage: string): 'group' | 'round16' | 'quarterfinal' | 'semifinal' | 'final' {
   if (stage.includes('Group')) return 'group';
-  if (stage.includes('Round 16') || stage.includes('Last 16')) return 'round16';
+  if (stage.includes('Round of 16') || stage.includes('Last 16')) return 'round16';
   if (stage.includes('Quarter')) return 'quarterfinal';
   if (stage.includes('Semi')) return 'semifinal';
   if (stage.includes('Final')) return 'final';
@@ -92,7 +119,7 @@ function generatePossibleScores(probabilities: { homeWin: number; draw: number; 
 
 function generateKeyFactors(match: StandardMatch): string[] {
   const factors = [];
-  
+
   if (match.status === 'LIVE') {
     factors.push(`第 ${match.elapsed || 0} 分钟`);
     if (match.homeScore !== null && match.awayScore !== null) {
@@ -101,10 +128,10 @@ function generateKeyFactors(match: StandardMatch): string[] {
       factors.push('比分暂未返回');
     }
   }
-  
+
   const maxProb = Math.max(
-    match.probabilities.homeWin, 
-    match.probabilities.draw, 
+    match.probabilities.homeWin,
+    match.probabilities.draw,
     match.probabilities.awayWin
   );
   if (maxProb >= 60) {
@@ -114,25 +141,25 @@ function generateKeyFactors(match: StandardMatch): string[] {
   } else {
     factors.push('势均力敌');
   }
-  
+
   return factors;
 }
 
 function generateAnalysis(match: StandardMatch): string {
   if (match.status === 'LIVE') {
-    const score = match.homeScore !== null && match.awayScore !== null 
-      ? `${match.homeScore}-${match.awayScore}` 
+    const score = match.homeScore !== null && match.awayScore !== null
+      ? `${match.homeScore}-${match.awayScore}`
       : '比分暂未返回';
     return `比赛进行中（第 ${match.elapsed || 0} 分钟），当前比分 ${score}。`;
   } else if (match.status === 'FINISHED') {
-    const score = match.homeScore !== null && match.awayScore !== null 
-      ? `${match.homeScore}-${match.awayScore}` 
+    const score = match.homeScore !== null && match.awayScore !== null
+      ? `${match.homeScore}-${match.awayScore}`
       : '比分暂未返回';
     return `比赛已结束，最终比分 ${score}。`;
   } else {
     const maxProb = Math.max(
-      match.probabilities.homeWin, 
-      match.probabilities.draw, 
+      match.probabilities.homeWin,
+      match.probabilities.draw,
       match.probabilities.awayWin
     );
     if (match.probabilities.homeWin === maxProb) {
@@ -145,71 +172,51 @@ function generateAnalysis(match: StandardMatch): string {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 组件主函数
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function MatchBoard() {
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
-  
-  // 获取北京时间今天的 UTC 日期字符串（用于 API 查询）
-  const getBeijingTodayUTC = () => {
-    const now = new Date();
-    // 北京时间 = UTC + 8小时
-    const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-    return beijingNow.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
-  };
-  
-  // 获取北京时间某个日期的 UTC 日期（用于 API 查询）
-  // 北京时间 00:00-07:59 对应 UTC 前一天
-  const getBeijingDateToUTC = (beijingDate: Date) => {
-    const beijingDayStart = new Date(beijingDate);
-    beijingDayStart.setHours(0, 0, 0, 0);
-    // 转换为 UTC
-    const utcDayStart = new Date(beijingDayStart.getTime() - 8 * 60 * 60 * 1000);
-    return utcDayStart.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
-  };
-  
-  // 初始值：北京时间今天的 UTC 日期
-  const [selectedDate, setSelectedDate] = useState(() => {
-    return getBeijingTodayUTC();
-  });
-  
-  // selectedDate 是 UTC 日期，转换为北京时间显示用
-  const selectedBeijingDate = new Date(new Date(selectedDate + 'T00:00:00Z').getTime() + 8 * 60 * 60 * 1000);
-  
-  // 使用实时数据 Hook
-  // date 参数使用 UTC 日期（selectedDate），ESPN API 接受 UTC 日期
+
+  // 纯北京时间日期字符串，不做任何 UTC 转换
+  const [selectedDate, setSelectedDate] = useState(() => getBeijingDateString(0));
+
+  // 使用实时数据 Hook，传入北京时间日期
   const { matches, loading, error, dataSource, lastUpdated, refetch } = useLiveScores({
     date: selectedDate,
     autoRefresh: true,
   });
-  
+
   // 转换为 DisplayMatch，并做前端防御过滤
   const displayMatches = matches
     .filter(match => isWorldCupCompetitionName(match.competition))
     .map(convertToDisplayMatch);
-  
+
   const filters: { id: FilterType; label: string }[] = [
     { id: 'all', label: '全部' },
     { id: 'upcoming', label: '未开始' },
     { id: 'live', label: '进行中' },
     { id: 'finished', label: '已结束' },
   ];
-  
+
+  // 过滤：按北京时间日期 + 状态
   const filteredMatches = displayMatches.filter(m => {
     if (selectedDate && m.date !== selectedDate) return false;
     if (activeFilter !== 'all' && m.status !== activeFilter) return false;
     return true;
   });
-  
-  // 统计：基于 selectedDate（UTC 日期）
-  // 北京时间 00:00-07:59 的比赛在 UTC 前一天，所以 selectedDate 对应北京时间 selectedBeijingDate
+
+  // 统计：基于北京时间日期
   const selectedDateMatches = displayMatches.filter(m => m.date === selectedDate);
   const liveCount = selectedDateMatches.filter(m => m.status === 'live').length;
   const finishedCount = selectedDateMatches.filter(m => m.status === 'finished').length;
   const upcomingCount = selectedDateMatches.filter(m => m.status === 'upcoming').length;
   const totalMatches = selectedDateMatches.length;
-  
+
   // 检查是否有真实数据
   const hasReal = hasRealData(dataSource, matches);
-  
+
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
       upcoming: 'bg-blue-100 text-blue-700',
@@ -222,7 +229,7 @@ export default function MatchBoard() {
       </span>
     );
   };
-  
+
   const getRiskBadge = (risk: string) => {
     const styles: Record<string, string> = {
       low: 'bg-green-100 text-green-700',
@@ -235,7 +242,7 @@ export default function MatchBoard() {
       </span>
     );
   };
-  
+
   const getConfidenceBar = (confidence: number) => {
     const color = confidence >= 75 ? 'bg-green-500' : confidence >= 60 ? 'bg-yellow-500' : 'bg-red-500';
     return (
@@ -247,18 +254,19 @@ export default function MatchBoard() {
       </div>
     );
   };
-  
+
   // 按日期分组
   const groupedMatches = filteredMatches.reduce((acc, match) => {
     if (!acc[match.date]) acc[match.date] = [];
     acc[match.date].push(match);
     return acc;
   }, {} as Record<string, any[]>);
-  
+
   const sortedDates = Object.keys(groupedMatches).sort();
-  
+
   return (
     <section id="matches" className="py-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+      {/* 标题区 */}
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-2">
           <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-orange-100">
@@ -274,7 +282,7 @@ export default function MatchBoard() {
             </div>
           </div>
         </div>
-        
+
         {/* 最后更新时间 + 刷新按钮 */}
         <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
           <span>最后更新：{formatLastUpdated(lastUpdated)}</span>
@@ -286,14 +294,14 @@ export default function MatchBoard() {
             {loading ? '刷新中...' : '刷新'}
           </button>
         </div>
-        
+
         {/* 错误提示 */}
         {error && (
           <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
             {error}
           </div>
         )}
-        
+
         {/* 无真实数据提示 */}
         {!hasReal && !loading && (
           <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
@@ -301,7 +309,7 @@ export default function MatchBoard() {
           </div>
         )}
       </div>
-      
+
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         {[
@@ -316,7 +324,7 @@ export default function MatchBoard() {
           </div>
         ))}
       </div>
-      
+
       {/* 过滤器 */}
       <div className="flex flex-wrap gap-2 mb-6">
         {filters.map(f => (
@@ -333,39 +341,31 @@ export default function MatchBoard() {
           </button>
         ))}
       </div>
-      
-      {/* 日期选择器 */}
+
+      {/* 日期选择器 — 纯北京时间按钮 */}
       <div className="flex items-center gap-2 mb-6 overflow-x-auto">
-        {['昨天', '今天', '明天'].map((label, idx) => {
-          // 计算北京时间基准日期
-          const beijingBase = new Date();
-          const beijingNow = new Date(beijingBase.getTime() + 8 * 60 * 60 * 1000);
-          const beijingDay = new Date(beijingNow);
-          beijingDay.setDate(beijingNow.getDate() + (idx - 1));
-          beijingDay.setHours(0, 0, 0, 0);
-          
-          // 北京时间该天的 UTC 日期（用于 API 查询）
-          const utcDateStr = beijingDay.toLocaleDateString('sv-SE', { timeZone: 'UTC' });
-          
-          // 北京时间该天的显示格式
-          const displayStr = beijingDay.toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-          
+        {[
+          { label: '昨天', offset: -1 },
+          { label: '今天', offset: 0 },
+          { label: '明天', offset: 1 },
+        ].map(({ label, offset }) => {
+          const dateStr = getBeijingDateString(offset);
           return (
             <button
               key={label}
-              onClick={() => setSelectedDate(utcDateStr)}
+              onClick={() => setSelectedDate(dateStr)}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                selectedDate === utcDateStr
+                selectedDate === dateStr
                   ? 'bg-green-600 text-white'
                   : 'bg-white text-gray-600 border border-gray-200'
               }`}
             >
-              {label} ({displayStr.slice(5)})
+              {label} ({dateStr.slice(5)})
             </button>
           );
         })}
       </div>
-      
+
       {/* 加载状态 */}
       {loading && displayMatches.length === 0 && (
         <div className="text-center py-12 text-gray-400">
@@ -373,7 +373,7 @@ export default function MatchBoard() {
           <p>加载中...</p>
         </div>
       )}
-      
+
       {/* 无数据提示 */}
       {sortedDates.length === 0 && !loading && (
         <div className="text-center py-12 text-gray-500">
@@ -381,7 +381,7 @@ export default function MatchBoard() {
           <p className="text-sm">可能原因：今天没有比赛、API Key 无效、数据套餐不支持该赛事、或数据源暂时不可用。</p>
         </div>
       )}
-      
+
       {/* 比赛列表 */}
       {sortedDates.length > 0 && (
         sortedDates.map(date => (
@@ -398,13 +398,13 @@ export default function MatchBoard() {
                     </div>
                     <span className="text-sm text-gray-500">{match.time}</span>
                   </div>
-                  
+
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex-1 text-center">
                       <div className="font-semibold text-green-900">{match.homeTeam}</div>
-                      {match.homeFlag && <span className="text-2xl">{match.homeFlag}</span>}
+                      <TeamLogo value={match.homeFlag} alt={match.homeTeam} />
                     </div>
-                    
+
                     <div className="px-6 text-center">
                       {match.status === 'live' ? (
                         <div className="text-3xl font-bold text-red-600">
@@ -421,13 +421,13 @@ export default function MatchBoard() {
                         <div className="text-xs text-red-500 mt-1">第 {match.elapsed} 分钟</div>
                       )}
                     </div>
-                    
+
                     <div className="flex-1 text-center">
                       <div className="font-semibold text-green-900">{match.awayTeam}</div>
-                      {match.awayFlag && <span className="text-2xl">{match.awayFlag}</span>}
+                      <TeamLogo value={match.awayFlag} alt={match.awayTeam} />
                     </div>
                   </div>
-                  
+
                   {/* 概率条 */}
                   <div className="grid grid-cols-3 gap-2 mb-4 text-sm">
                     <div className="text-center">
@@ -443,7 +443,7 @@ export default function MatchBoard() {
                       <div className="font-bold text-blue-700">{match.loseProb}%</div>
                     </div>
                   </div>
-                  
+
                   {/* 信心分 */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between text-sm mb-1">
@@ -452,7 +452,7 @@ export default function MatchBoard() {
                     </div>
                     {getConfidenceBar(match.confidence)}
                   </div>
-                  
+
                   {/* 分析 */}
                   <div className="text-sm text-gray-600">
                     {match.analysis}

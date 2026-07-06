@@ -135,19 +135,14 @@ function getRiskLevel(probabilities: { homeWin: number; draw: number; awayWin: n
  * 为保险起见，查询 [utcPrev, utcToday] 两个 UTC 日期。
  */
 function beijingDateToUtcRange(beijingDate: string): string[] {
-  // 转换为 UTC 00:00 的时间戳（北京时间 midnight）
-  const CST = 'Asia/Shanghai';
-  const utcMidnight = new Date(`${beijingDate}T00:00:00`);
-  const utcMidnightCST = new Date(utcMidnight.toLocaleString('en-US', { timeZone: CST }));
-  const offset = utcMidnight.getTime() - utcMidnightCST.getTime(); // 北京比 UTC 快 8h
+  // 用显式时区字符串，避免 toLocaleString 精度问题
+  const startUtc = new Date(`${beijingDate}T00:00:00+08:00`);
+  const endUtc = new Date(`${beijingDate}T23:59:59+08:00`);
 
-  const prevUTC = new Date(utcMidnight.getTime() - offset - 86400000);
-  const todayUTC = new Date(utcMidnight.getTime() - offset);
-
-  return [
-    prevUTC.toISOString().slice(0, 10), // 前一天 UTC
-    todayUTC.toISOString().slice(0, 10), // 当天 UTC
-  ];
+  return Array.from(new Set([
+    startUtc.toISOString().slice(0, 10),
+    endUtc.toISOString().slice(0, 10),
+  ]));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
