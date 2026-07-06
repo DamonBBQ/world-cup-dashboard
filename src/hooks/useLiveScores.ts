@@ -47,6 +47,7 @@ interface UseLiveScoresResult {
 
 /**
  * 自定义 Hook：获取实时比赛数据
+ * 确保每次请求都是最新数据，不使用缓存
  */
 export function useLiveScores({ date, autoRefresh = true, refreshInterval }: UseLiveScoresOptions): UseLiveScoresResult {
   const [matches, setMatches] = useState<StandardMatch[]>([]);
@@ -56,16 +57,26 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(true);
   
   /**
-   * 获取数据
+   * 获取数据 - 强制禁用缓存
    */
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
-      const response = await fetch(`/api/live-scores?date=${date}`);
+      // 添加时间戳参数强制禁用缓存
+      const timestamp = Date.now();
+      const url = `/api/live-scores?date=${encodeURIComponent(date)}&_t=${timestamp}`;
+      
+      const response = await fetch(url, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -73,24 +84,33 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
       
       const data = await response.json();
       
+      if (!isMountedRef.current) return;
+      
       setMatches(data.matches || []);
       setDataSource(data.dataSource || 'none');
       setLastUpdated(data.lastUpdated || null);
       
       if (data.error) {
+        setError(data.error);
         console.warn('[useLiveScores] API returned error:', data.error);
+      } else {
+        setError(null);
       }
     } catch (err: any) {
-      console.error('[useLiveScores] Fetch error:', err);
-      setError(err.message || 'Failed to fetch data');
+      if (!isMountedRef.current) return;
       
+      console.error('[useLiveScores] Fetch error:', err);
+      setError(err.message || '数据获取失败');
       // 保留上一次成功的数据，不清空
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [date]);
+  
   /**
-   * 手动刷新
+   * 手动刷新 - 立即获取最新数据
    */
   const refetch = useCallback(async () => {
     await fetchData();
@@ -115,9 +135,11 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
       const hasLiveMatches = matches.some(m => m.status === 'LIVE');
       
       if (hasLiveMatches) {
-        return 15 * 1000; // 15 秒
+        return 15 * 1000; // 15 秒 - 进行中比赛频繁刷新
+      } else if (dataSource === 'none' || error) {
+        return 30 * 1000; // 30 秒 - 数据源异常时重试
       } else {
-        return 60 * 1000; // 1 分钟
+        return 60 * 1000; // 60 秒 - 非进行中比赛
       }
     };
     
@@ -126,7 +148,7 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
     intervalRef.current = setInterval(() => {
       fetchData();
     }, interval);
-  }, [autoRefresh, refreshInterval, matches, fetchData]);
+  }, [autoRefresh, refreshInterval, matches, dataSource, error, fetchData]);
   
   /**
    * 停止自动刷新
@@ -136,6 +158,14 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+  }, []);
+  
+  // 组件挂载标志
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
   
   // 首次加载
@@ -154,13 +184,13 @@ export function useLiveScores({ date, autoRefresh = true, refreshInterval }: Use
     };
   }, [autoRefresh, startAutoRefresh, stopAutoRefresh]);
   
-  // 监听页面可见性，隐藏时停止刷新
+  // 监听页面可见性：隐藏时停止刷新，切回前台时立即刷新
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         stopAutoRefresh();
       } else if (autoRefresh) {
-        fetchData(); // 立即刷新一次
+        fetchData(); // 立即刷新一次获取最新数据
         startAutoRefresh();
       }
     };
@@ -193,7 +223,9 @@ export function formatLastUpdated(lastUpdated: string | null): string {
   const diffMs = now.getTime() - date.getTime();
   const diffSec = Math.floor(diffMs / 1000);
   
-  if (diffSec < 60) {
+  if (diffSec < 5) {
+    return '刚刚';
+  } else if (diffSec < 60) {
     return `${diffSec} 秒前`;
   } else if (diffSec < 3600) {
     return `${Math.floor(diffSec / 60)} 分钟前`;
@@ -210,11 +242,9 @@ export function getDataSourceColor(dataSource: string): string {
     case 'api-football':
     case 'football-data':
       return 'text-green-600'; // 真实数据
-    case 'mock':
-      return 'text-yellow-600'; // Mock 数据
     case 'none':
     default:
-      return 'text-gray-400'; // 无数据
+      return 'text-red-600'; // 无数据或异常
   }
 }
 
@@ -224,13 +254,18 @@ export function getDataSourceColor(dataSource: string): string {
 export function getDataSourceLabel(dataSource: string): string {
   switch (dataSource) {
     case 'api-football':
-      return 'API-FOOTBALL';
+      return 'API-FOOTBALL 实时数据';
     case 'football-data':
-      return 'football-data.org';
-    case 'mock':
-      return '模拟数据';
+      return 'football-data.org 实时数据';
     case 'none':
     default:
-      return '无数据';
+      return '实时数据暂不可用';
   }
+}
+
+/**
+ * 检查是否有真实数据
+ */
+export function hasRealData(dataSource: string, matches: any[]): boolean {
+  return (dataSource === 'api-football' || dataSource === 'football-data') && matches.length > 0;
 }

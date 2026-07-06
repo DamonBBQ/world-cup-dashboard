@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { fetchLocalMatches, getTeamRating, buildSyntheticOddsForMatches, getFullOddsMap, type StandardMatch } from '../services/localData';
+import { useCallback, useEffect, useState, useMemo } from 'react';
+import { getTeamRating, buildSyntheticOddsForMatches, getFullOddsMap } from '../services/localData';
+import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
 import {
   generateExampleTickets,
   generateSplitTickets,
@@ -25,6 +26,15 @@ import {
 import { addTicket } from '../utils/localStorage';
 
 interface SplitTicketBuilderProps {
+  /** 从父组件传入的实时比赛数据 */
+  liveMatches?: StandardMatch[];
+  /** 父组件的加载状态 */
+  liveLoading?: boolean;
+  /** 父组件的错误信息 */
+  liveError?: string | null;
+  /** 父组件的刷新函数 */
+  onRefreshMatches?: () => void;
+  /** 保存到台账后的回调 */
   onSaveToLedger?: () => void;
 }
 
@@ -68,7 +78,13 @@ const RISK_BADGE_CLASS: Record<string, string> = {
   高: 'bg-red-100 text-red-700',
 };
 
-export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilderProps) {
+export default function SplitTicketBuilder({
+  liveMatches: externalMatches,
+  liveLoading: externalLoading,
+  liveError: externalError,
+  onRefreshMatches: externalRefresh,
+  onSaveToLedger,
+}: SplitTicketBuilderProps) {
   const [tickets, setTickets] = useState<SplitTicket[]>([]);
   const [totalBudget, setTotalBudget] = useState(100);
   const [maxSingleTicket, setMaxSingleTicket] = useState(20);
@@ -79,9 +95,9 @@ export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilde
   const [savedGroupId, setSavedGroupId] = useState<string | null>(null);
   const [riskPreference, setRiskPreference] = useState<'conservative' | 'moderate' | 'aggressive'>('moderate');
   const [availableMatches, setAvailableMatches] = useState<SelectableMatch[]>([]);
-  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
-  /** 派生状态：始终从 selectedIndices + availableMatches 计算，供 JSX 渲染层使用 */
-  const selectedMatches: SelectableMatch[] = [...selectedIndices].sort().map(i => availableMatches[i]);
+  const [selectedMatchIds, setSelectedMatchIds] = useState<Set<string>>(new Set());
+  /** 派生状态：始终从 selectedMatchIds + availableMatches 计算 */
+  const selectedMatches: SelectableMatch[] = availableMatches.filter(m => selectedMatchIds.has(m.id));
   const [result, setResult] = useState<SanitizedResult | null>(null);
 
   // ── 比赛加载状态 ──
@@ -92,86 +108,97 @@ export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilde
   /** 合成赔率表（比赛加载后构建） */
   const [oddsMap, setOddsMap] = useState<Record<string, string | undefined>>({});
 
-  const loadMatches = useCallback(async () => {
-    setMatchesLoading(true);
-    setMatchesError(null);
+  /**
+   * 将实时 API 数据转换为 SelectableMatch 格式
+   */
+  const convertToSelectableMatches = useCallback((matches: StandardMatch[]): SelectableMatch[] => {
+    // 过滤无效对阵
+    const valid = matches.filter(m => {
+      if (!m.homeTeam?.name || !m.awayTeam?.name) return false;
+      if (m.homeTeam.name === 'None' || m.awayTeam.name === 'None') return false;
+      if (m.homeTeam.name === 'TBD' || m.awayTeam.name === 'TBD') return false;
+      return true;
+    });
 
-    try {
-      // fallback: WC → WorldCup → worldcup → all
-      let matches = await fetchLocalMatches('WC');
-      if (!matches.length) matches = await fetchLocalMatches('WorldCup');
-      if (!matches.length) matches = await fetchLocalMatches('worldcup');
-      if (!matches.length) matches = await fetchLocalMatches('all');
+    // 转换为 SelectableMatch
+    return valid.map(m => {
+      const homeName = m.homeTeam.name;
+      const awayName = m.awayTeam.name;
+      
+      // 标准化状态
+      let rawStatus = 'TIMED';
+      if (m.status === 'LIVE') rawStatus = 'IN_PLAY';
+      else if (m.status === 'FINISHED') rawStatus = 'FINISHED';
 
-      console.log('[SplitTicketBuilder] raw matches:', matches.length, matches.slice(0, 3));
-      setRawMatchCount(matches.length);
+      // 构建 ISO 日期时间
+      const utcDate = `${m.date}T${m.time}:00.000Z`;
 
-      // 构建合成赔率（API 无赔率时从球队评分合成）
-      const synthetic = buildSyntheticOddsForMatches(matches);
-      setOddsMap(synthetic);
-      console.log('[SplitTicketBuilder] synthetic odds:', Object.keys(synthetic).length, 'entries');
-
-      if (matches.length === 0) {
-        setMatchesError('数据源为空，未读取到任何比赛数据。请先运行同步脚本：python3 scripts/ingest/fetch_football_data.py');
-        setAvailableMatches([]);
-        setSelectedIndices(new Set());
-        return;
-      }
-
-      // 标准化 + 过滤无效对阵
-      const normalized = matches
-        .filter(m => {
-          const home = m.homeShortName || m.homeTeam;
-          const away = m.awayShortName || m.awayTeam;
-          if (!home || !away) return false;
-          if (home === 'None' || away === 'None') return false;
-          if (home === 'TBD' || away === 'TBD') return false;
-          return true;
-        })
-        .map(m => ({
-          id: makeMatchId(m.homeShortName || m.homeTeam, m.awayShortName || m.awayTeam),
-          home: m.homeShortName || m.homeTeam,
-          away: m.awayShortName || m.awayTeam,
-          homeRating: getTeamRating(m.homeTeam),
-          awayRating: getTeamRating(m.awayTeam),
-          rawStatus: normalizeMatchStatus(m.status),
-          competition: m.competition || 'WC',
-          utcDate: m.utcDate,
-        }));
-
-      console.log('[SplitTicketBuilder] normalized matches:', normalized.length, normalized.slice(0, 3));
-
-      // 只保留赛前比赛
-      const upcoming = normalized.filter(m => isPreMatchStatus(m.rawStatus));
-      setFilteredOutCount(normalized.length - upcoming.length);
-
-      console.log('[SplitTicketBuilder] upcoming (pre-match) matches:', upcoming.length, upcoming.slice(0, 3));
-
-      upcoming.sort((a, b) => new Date(a.utcDate || 0).getTime() - new Date(b.utcDate || 0).getTime());
-
-      setAvailableMatches(upcoming);
-      setSelectedIndices(new Set([0, 1, 2, 3].filter(i => i < upcoming.length)));
-
-      if (upcoming.length === 0) {
-        setMatchesError(
-          `已读取 ${matches.length} 场比赛，但没有可用于赛前模拟的待开比赛。` +
-          `可能原因：比赛已开赛/结束，或状态字段不匹配。` +
-          `（标准化后非赛前 ${normalized.length} 场）`
-        );
-      }
-    } catch (err) {
-      console.error('[SplitTicketBuilder] 加载比赛失败:', err);
-      setMatchesError(err instanceof Error ? err.message : '比赛数据加载失败');
-      setAvailableMatches([]);
-      setSelectedIndices(new Set());
-    } finally {
-      setMatchesLoading(false);
-    }
+      return {
+        id: m.id,
+        home: homeName,
+        away: awayName,
+        homeRating: getTeamRating(homeName),
+        awayRating: getTeamRating(awayName),
+        rawStatus,
+        competition: m.competition || 'WC',
+        utcDate,
+      };
+    });
   }, []);
 
+  /**
+   * 处理传入的实时数据
+   */
   useEffect(() => {
-    loadMatches();
-  }, [loadMatches]);
+    if (externalMatches && externalMatches.length > 0) {
+      // 使用传入的实时数据
+      const converted = convertToSelectableMatches(externalMatches);
+      
+      // 构建合成赔率
+      const synthetic = buildSyntheticOddsForMatches(externalMatches as any);
+      setOddsMap(synthetic);
+      
+      // 只保留赛前比赛（NOT_STARTED）
+      const preMatch = converted.filter(m => isPreMatchStatus(m.rawStatus));
+      
+      // 按时间排序
+      preMatch.sort((a, b) => new Date(a.utcDate || 0).getTime() - new Date(b.utcDate || 0).getTime());
+      
+      setAvailableMatches(preMatch);
+      setMatchesLoading(false);
+      setMatchesError(null);
+      setRawMatchCount(converted.length);
+      setFilteredOutCount(converted.length - preMatch.length);
+      
+      // 默认选中前 4 场
+      const defaultIds = preMatch.slice(0, 4).map(m => m.id);
+      setSelectedMatchIds(new Set(defaultIds));
+      
+      console.log('[SplitTicketBuilder] 使用实时数据:', {
+        total: converted.length,
+        preMatch: preMatch.length,
+        dataSource: 'live'
+      });
+    } else if (!externalLoading && externalError) {
+      // 外部数据加载失败
+      setMatchesError(externalError);
+      setAvailableMatches([]);
+      setSelectedMatchIds(new Set());
+      setMatchesLoading(false);
+    } else if (!externalLoading && (!externalMatches || externalMatches.length === 0)) {
+      // 外部数据为空（没有真实数据）
+      setMatchesError('暂无实时数据，请检查 API Key 配置');
+      setAvailableMatches([]);
+      setSelectedMatchIds(new Set());
+      setMatchesLoading(false);
+    }
+  }, [externalMatches, externalLoading, externalError, convertToSelectableMatches]);
+
+  const handleRefresh = () => {
+    if (externalRefresh) {
+      externalRefresh();
+    }
+  };
 
   const handleLoadExample = () => {
     const exampleTickets = generateExampleTickets();
@@ -299,7 +326,7 @@ export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilde
                 原始比赛数：{rawMatchCount}；被过滤比赛数：{filteredOutCount}
               </div>
               <button
-                onClick={() => loadMatches()}
+                onClick={handleRefresh}
                 className="mt-2 px-3 py-1 text-xs border border-amber-400 text-amber-700 rounded hover:bg-amber-100 transition-colors"
               >
                 重新加载
@@ -309,7 +336,7 @@ export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilde
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
               当前没有待开比赛可用于赛前模拟。进行中或已结束比赛仅可用于复盘。
               <button
-                onClick={() => loadMatches()}
+                onClick={handleRefresh}
                 className="ml-2 px-3 py-1 text-xs border border-gray-400 text-gray-600 rounded hover:bg-gray-100 transition-colors"
               >
                 重新加载
@@ -317,18 +344,18 @@ export default function SplitTicketBuilder({ onSaveToLedger }: SplitTicketBuilde
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {availableMatches.map((m, i) => {
-                const selected = selectedIndices.has(i);
+              {availableMatches.map((m) => {
+                const selected = selectedMatchIds.has(m.id);
                 const isPreMatch = isPreMatchStatus(m.rawStatus);
                 return (
                   <button
-                    key={i}
+                    key={m.id}
                     onClick={() => {
                       if (!isPreMatch) return;
-                      const next = new Set(selectedIndices);
-                      if (selected) next.delete(i);
-                      else next.add(i);
-                      setSelectedIndices(next);
+                      const next = new Set(selectedMatchIds);
+                      if (selected) next.delete(m.id);
+                      else next.add(m.id);
+                      setSelectedMatchIds(next);
                     }}
                     className={`px-3 py-2 rounded-lg text-sm border transition-colors text-left ${
                       !isPreMatch

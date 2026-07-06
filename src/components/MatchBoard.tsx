@@ -1,13 +1,31 @@
-import { useState, useCallback } from 'react';
-import { useLiveScores, formatLastUpdated, getDataSourceColor, getDataSourceLabel } from '../hooks/useLiveScores';
-import { stageLabels, statusLabels, riskLabels } from '../data/mockMatches';
+import { useState } from 'react';
+import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
+import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
+
+// 状态标签映射
+const STATUS_LABELS: Record<string, string> = {
+  upcoming: '未开始',
+  live: '进行中',
+  finished: '已结束',
+};
+
+// 风险等级标签映射
+const RISK_LABELS: Record<string, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+};
 
 type FilterType = 'all' | 'upcoming' | 'live' | 'finished';
 
 /**
  * 将 API 返回的 StandardMatch 转换为组件需要的 DisplayMatch
  */
-function convertToDisplayMatch(match: any): any {
+function convertToDisplayMatch(match: StandardMatch): any {
+  const status: 'upcoming' | 'live' | 'finished' = 
+    match.status === 'NOT_STARTED' ? 'upcoming' : 
+    match.status === 'LIVE' ? 'live' : 'finished';
+  
   return {
     id: match.id,
     date: match.date,
@@ -16,7 +34,7 @@ function convertToDisplayMatch(match: any): any {
     awayTeam: match.awayTeam.name,
     homeFlag: match.homeTeam.flag,
     awayFlag: match.awayTeam.flag,
-    status: match.status === 'NOT_STARTED' ? 'upcoming' : match.status === 'LIVE' ? 'live' : 'finished',
+    status,
     stage: mapStage(match.stage),
     homeScore: match.homeScore,
     awayScore: match.awayScore,
@@ -34,6 +52,7 @@ function convertToDisplayMatch(match: any): any {
     group: null,
     competition: match.competition,
     competitionCode: undefined,
+    elapsed: match.elapsed,
   };
 }
 
@@ -54,7 +73,7 @@ function mapRiskLevel(risk: string): 'low' | 'medium' | 'high' {
 
 function calculateConfidence(probabilities: { homeWin: number; draw: number; awayWin: number }): number {
   const maxProb = Math.max(probabilities.homeWin, probabilities.draw, probabilities.awayWin);
-  return Math.round(maxProb * 0.9 + 10); // 简单映射
+  return Math.round(maxProb * 0.9 + 10);
 }
 
 function generateRecommendedPick(probabilities: { homeWin: number; draw: number; awayWin: number }): string {
@@ -65,21 +84,28 @@ function generateRecommendedPick(probabilities: { homeWin: number; draw: number;
 }
 
 function generatePossibleScores(probabilities: { homeWin: number; draw: number; awayWin: number }): string[] {
-  // 简化版：根据概率生成可能的比分
   if (probabilities.homeWin >= 50) return ['2-1', '1-0', '2-0'];
   if (probabilities.awayWin >= 50) return ['0-1', '1-2', '0-2'];
   return ['1-1', '0-0', '2-2'];
 }
 
-function generateKeyFactors(match: any): string[] {
+function generateKeyFactors(match: StandardMatch): string[] {
   const factors = [];
   
   if (match.status === 'LIVE') {
-    factors.push(`第 ${match.elapsed} 分钟`);
-    factors.push(`当前比分 ${match.homeScore}-${match.awayScore}`);
+    factors.push(`第 ${match.elapsed || 0} 分钟`);
+    if (match.homeScore !== null && match.awayScore !== null) {
+      factors.push(`当前比分 ${match.homeScore}-${match.awayScore}`);
+    } else {
+      factors.push('比分暂未返回');
+    }
   }
   
-  const maxProb = Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin);
+  const maxProb = Math.max(
+    match.probabilities.homeWin, 
+    match.probabilities.draw, 
+    match.probabilities.awayWin
+  );
   if (maxProb >= 60) {
     factors.push('胜率较高');
   } else if (maxProb >= 45) {
@@ -91,13 +117,23 @@ function generateKeyFactors(match: any): string[] {
   return factors;
 }
 
-function generateAnalysis(match: any): string {
+function generateAnalysis(match: StandardMatch): string {
   if (match.status === 'LIVE') {
-    return `比赛进行中（第 ${match.elapsed} 分钟），当前比分 ${match.homeScore}-${match.awayScore}。`;
+    const score = match.homeScore !== null && match.awayScore !== null 
+      ? `${match.homeScore}-${match.awayScore}` 
+      : '比分暂未返回';
+    return `比赛进行中（第 ${match.elapsed || 0} 分钟），当前比分 ${score}。`;
   } else if (match.status === 'FINISHED') {
-    return `比赛已结束，最终比分 ${match.homeScore}-${match.awayScore}。`;
+    const score = match.homeScore !== null && match.awayScore !== null 
+      ? `${match.homeScore}-${match.awayScore}` 
+      : '比分暂未返回';
+    return `比赛已结束，最终比分 ${score}。`;
   } else {
-    const maxProb = Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin);
+    const maxProb = Math.max(
+      match.probabilities.homeWin, 
+      match.probabilities.draw, 
+      match.probabilities.awayWin
+    );
     if (match.probabilities.homeWin === maxProb) {
       return `${match.homeTeam.name} 胜率较高（${match.probabilities.homeWin}%），值得关注。`;
     } else if (match.probabilities.awayWin === maxProb) {
@@ -141,6 +177,9 @@ export default function MatchBoard() {
   const finishedCount = todayMatches.filter(m => m.status === 'finished').length;
   const upcomingCount = todayMatches.filter(m => m.status === 'upcoming').length;
   
+  // 检查是否有真实数据
+  const hasReal = hasRealData(dataSource, matches);
+  
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
       upcoming: 'bg-blue-100 text-blue-700',
@@ -149,7 +188,7 @@ export default function MatchBoard() {
     };
     return (
       <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.upcoming}`}>
-        {statusLabels[status] || status}
+        {STATUS_LABELS[status] || status}
       </span>
     );
   };
@@ -162,7 +201,7 @@ export default function MatchBoard() {
     };
     return (
       <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[risk] || styles.medium}`}>
-        {riskLabels[risk] || risk}
+        {RISK_LABELS[risk] || risk}
       </span>
     );
   };
@@ -197,14 +236,11 @@ export default function MatchBoard() {
           </div>
           <div>
             <h2 className="text-2xl font-bold text-green-900">今日赛果与进行中比赛</h2>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span>数据来源：</span>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-500">数据来源：</span>
               <span className={`font-medium ${getDataSourceColor(dataSource)}`}>
                 {getDataSourceLabel(dataSource)}
               </span>
-              {dataSource === 'mock' && (
-                <span className="text-yellow-600 text-xs">（非实时数据）</span>
-              )}
             </div>
           </div>
         </div>
@@ -223,8 +259,15 @@ export default function MatchBoard() {
         
         {/* 错误提示 */}
         {error && (
-          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-            数据更新失败：{error}。已保留上一次成功数据。
+          <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            {error}
+          </div>
+        )}
+        
+        {/* 无真实数据提示 */}
+        {!hasReal && !loading && (
+          <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
+            实时数据暂不可用。请检查 API Key 配置、数据套餐权限，或当天是否有比赛。
           </div>
         )}
       </div>
@@ -291,15 +334,16 @@ export default function MatchBoard() {
         </div>
       )}
       
-      {/* 比赛列表 */}
-      {sortedDates.length === 0 && !loading ? (
-        <div className="text-center py-12 text-gray-400">
-          <p>暂无比赛数据</p>
-          {dataSource === 'mock' && (
-            <p className="text-sm mt-2">当前使用模拟数据，请配置 API Key 以获取实时数据</p>
-          )}
+      {/* 无数据提示 */}
+      {sortedDates.length === 0 && !loading && (
+        <div className="text-center py-12 text-gray-500">
+          <p className="text-lg mb-2">暂无实时比赛数据</p>
+          <p className="text-sm">可能原因：今天没有比赛、API Key 无效、数据套餐不支持该赛事、或数据源暂时不可用。</p>
         </div>
-      ) : (
+      )}
+      
+      {/* 比赛列表 */}
+      {sortedDates.length > 0 && (
         sortedDates.map(date => (
           <div key={date} className="mb-8">
             <h3 className="text-lg font-semibold text-green-900 mb-4">{date}</h3>
@@ -324,11 +368,11 @@ export default function MatchBoard() {
                     <div className="px-6 text-center">
                       {match.status === 'live' ? (
                         <div className="text-3xl font-bold text-red-600">
-                          {match.homeScore} - {match.awayScore}
+                          {match.homeScore !== null ? match.homeScore : '?'} - {match.awayScore !== null ? match.awayScore : '?'}
                         </div>
                       ) : match.status === 'finished' ? (
                         <div className="text-3xl font-bold text-gray-900">
-                          {match.homeScore} - {match.awayScore}
+                          {match.homeScore !== null ? match.homeScore : '?'} - {match.awayScore !== null ? match.awayScore : '?'}
                         </div>
                       ) : (
                         <div className="text-lg text-gray-400">vs</div>
@@ -364,6 +408,7 @@ export default function MatchBoard() {
                   <div className="mb-4">
                     <div className="flex items-center justify-between text-sm mb-1">
                       <span className="text-gray-600">预测信心</span>
+                      <span className="text-xs text-gray-400">算法预测</span>
                     </div>
                     {getConfidenceBar(match.confidence)}
                   </div>

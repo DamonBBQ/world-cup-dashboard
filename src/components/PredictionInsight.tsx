@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
-import { useLiveScores } from '../hooks/useLiveScores';
-import { formatLastUpdated, getDataSourceColor, getDataSourceLabel } from '../hooks/useLiveScores';
+import { useMemo } from 'react';
+import { useLiveScores, type StandardMatch } from '../hooks/useLiveScores';
+import { formatLastUpdated, getDataSourceColor, getDataSourceLabel, hasRealData } from '../hooks/useLiveScores';
 
 interface DisplayMatch {
   id: string;
@@ -30,7 +30,11 @@ interface DisplayMatch {
 /**
  * 将 API 返回的 StandardMatch 转换为组件需要的 DisplayMatch
  */
-function convertToDisplayMatch(match: any): DisplayMatch {
+function convertToDisplayMatch(match: StandardMatch): DisplayMatch {
+  const status: 'upcoming' | 'live' | 'finished' = 
+    match.status === 'NOT_STARTED' ? 'upcoming' : 
+    match.status === 'LIVE' ? 'live' : 'finished';
+  
   return {
     id: match.id,
     date: match.date,
@@ -39,32 +43,35 @@ function convertToDisplayMatch(match: any): DisplayMatch {
     awayTeam: match.awayTeam.name,
     homeFlag: match.homeTeam.flag,
     awayFlag: match.awayTeam.flag,
-    status: match.status === 'NOT_STARTED' ? 'upcoming' : match.status === 'LIVE' ? 'live' : 'finished',
+    status,
     stage: 'group',
     homeScore: match.homeScore ?? undefined,
     awayScore: match.awayScore ?? undefined,
     winProb: match.probabilities.homeWin,
     drawProb: match.probabilities.draw,
     loseProb: match.probabilities.awayWin,
-    confidence: Math.round(Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin) * 0.9),
+    confidence: Math.round(Math.max(
+      match.probabilities.homeWin, 
+      match.probabilities.draw, 
+      match.probabilities.awayWin
+    ) * 0.9),
     riskLevel: match.riskLevel === '低风险' ? 'low' : match.riskLevel === '中风险' ? 'medium' : 'high',
     recommendedPick: match.probabilities.homeWin >= 45 ? '主胜' : match.probabilities.awayWin >= 45 ? '客胜' : '平局',
     possibleScores: ['1-0', '2-1', '1-1'],
     overUnder: 'neutral',
     keyFactors: [
-      `胜率 ${(Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin))}%`,
-      match.status === 'LIVE' ? `第 ${match.elapsed} 分钟` : '未开始',
+      `胜率 ${Math.max(match.probabilities.homeWin, match.probabilities.draw, match.probabilities.awayWin)}%`,
+      status === 'live' ? `第 ${match.elapsed || 0} 分钟` : '算法预测',
     ],
-    analysis: match.status === 'LIVE' 
-      ? `比赛进行中，当前 ${match.homeScore}-${match.awayScore}`
-      : `预测：${match.homeTeam.name} 胜率 ${match.probabilities.homeWin}%`,
+    analysis: status === 'live' 
+      ? `进行中：${match.homeScore ?? '?'}-${match.awayScore ?? '?'}`
+      : `算法预测：${match.homeTeam.name} 胜率 ${match.probabilities.homeWin}%`,
   };
 }
 
 export default function PredictionInsight() {
-  // 获取今天和明天的日期
+  // 获取今天的日期
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
-  const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
   
   // 使用实时数据 Hook
   const { matches, loading, error, dataSource, lastUpdated, refetch } = useLiveScores({
@@ -73,12 +80,14 @@ export default function PredictionInsight() {
   });
   
   // 转换为 DisplayMatch
-  const displayMatches = matches.map(convertToDisplayMatch);
+  const displayMatches = useMemo(() => matches.map(convertToDisplayMatch), [matches]);
   
   // 过滤掉对阵未确定的比赛
-  const validMatches = displayMatches.filter(m => m.homeTeam && m.homeTeam !== 'None' && m.awayTeam && m.awayTeam !== 'None');
+  const validMatches = displayMatches.filter(m => 
+    m.homeTeam && m.homeTeam !== 'None' && m.awayTeam && m.awayTeam !== 'None'
+  );
   
-  // 优先展示未开始和进行中的比赛，按时间排序
+  // 优先展示未开始和进行中的比赛
   const featuredMatches = validMatches
     .filter(m => m.status !== 'finished')
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -88,6 +97,9 @@ export default function PredictionInsight() {
   const showMatches = featuredMatches.length >= 4
     ? featuredMatches.slice(0, displayCount)
     : [...featuredMatches, ...validMatches.filter(m => m.status === 'finished').slice(0, displayCount - featuredMatches.length)];
+  
+  // 检查是否有真实数据
+  const hasReal = hasRealData(dataSource, matches);
   
   const getProbabilityBar = (win: number, draw: number, lose: number) => {
     const total = win + draw + lose;
@@ -146,14 +158,11 @@ export default function PredictionInsight() {
           </div>
           <div>
             <h2 className="text-2xl font-bold text-green-900">预测与策略洞察</h2>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span>数据来源：</span>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-500">数据来源：</span>
               <span className={`font-medium ${getDataSourceColor(dataSource)}`}>
                 {getDataSourceLabel(dataSource)}
               </span>
-              {dataSource === 'mock' && (
-                <span className="text-yellow-600 text-xs">（非实时数据）</span>
-              )}
             </div>
           </div>
         </div>
@@ -170,8 +179,8 @@ export default function PredictionInsight() {
         </div>
         
         {error && (
-          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-            数据更新失败：{error}。已保留上一次成功数据。
+          <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            {error}
           </div>
         )}
       </div>
@@ -180,6 +189,12 @@ export default function PredictionInsight() {
         <div className="text-center py-12 text-gray-400">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
           <p>加载中...</p>
+        </div>
+      ) : !hasReal && !loading ? (
+        <div className="text-center py-12 text-gray-500">
+          <p className="text-lg mb-2">暂无实时比赛数据</p>
+          <p className="text-sm">可能原因：今天没有比赛、API Key 无效、数据套餐不支持该赛事、或数据源暂时不可用。</p>
+          <p className="text-xs mt-4 text-gray-400">概率为算法估算，仅供参考。</p>
         </div>
       ) : (
         <div className="grid gap-6">
@@ -201,14 +216,17 @@ export default function PredictionInsight() {
                 <div className="px-6 text-center">
                   {match.status === 'live' ? (
                     <div className="text-2xl font-bold text-red-600">
-                      {match.homeScore} - {match.awayScore}
+                      {match.homeScore !== undefined ? match.homeScore : '?'} - {match.awayScore !== undefined ? match.awayScore : '?'}
                     </div>
                   ) : match.status === 'finished' ? (
                     <div className="text-2xl font-bold text-gray-900">
-                      {match.homeScore} - {match.awayScore}
+                      {match.homeScore !== undefined ? match.homeScore : '?'} - {match.awayScore !== undefined ? match.awayScore : '?'}
                     </div>
                   ) : (
                     <div className="text-lg text-gray-400">vs</div>
+                  )}
+                  {match.status === 'live' && match.elapsed && (
+                    <div className="text-xs text-red-500 mt-1">第 {match.elapsed} 分钟</div>
                   )}
                 </div>
                 
@@ -219,7 +237,8 @@ export default function PredictionInsight() {
               
               <div className="mb-4">
                 <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="text-gray-600">胜平负概率</span>
+                  <span className="text-gray-600">胜平负概率（算法预测）</span>
+                  <span className="text-xs text-gray-400">仅供参考</span>
                 </div>
                 {getProbabilityBar(match.winProb, match.drawProb, match.loseProb)}
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
@@ -236,11 +255,9 @@ export default function PredictionInsight() {
           ))}
           
           {showMatches.length === 0 && !loading && (
-            <div className="text-center py-12 text-gray-400">
-              <p>暂无比赛数据</p>
-              {dataSource === 'mock' && (
-                <p className="text-sm mt-2">当前使用模拟数据，请配置 API Key 以获取实时数据</p>
-              )}
+            <div className="text-center py-12 text-gray-500">
+              <p>今天暂无比赛</p>
+              <p className="text-xs mt-4 text-gray-400">概率为算法估算，仅供参考。</p>
             </div>
           )}
         </div>

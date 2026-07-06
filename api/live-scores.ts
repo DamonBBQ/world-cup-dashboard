@@ -42,45 +42,65 @@ const TEAM_RATINGS: Record<string, number> = {
   'Canada': 74, 'Cameroon': 71, 'Ghana': 72, 'Tunisia': 70, 'Iran': 71,
   'Saudi Arabia': 68, 'Qatar': 65, 'Australia': 72, 'Costa Rica': 70, 'Wales': 73,
   'Algeria': 72, 'Egypt': 73, 'Nigeria': 74, 'Mali': 70,
-  'Ivory Coast': 72, 'South Africa': 69, 'Al Ahly': 65, 'Wydad Casablanca': 64,
+  'Ivory Coast': 72, 'South Africa': 69,
 };
 
 /**
  * 计算胜平负概率（基于球队评分）
+ * 使用更合理的三项归一化算法
  */
 function calculateProbabilities(homeTeam: string, awayTeam: string): { homeWin: number; draw: number; awayWin: number } {
   const homeRating = TEAM_RATINGS[homeTeam] || 70;
   const awayRating = TEAM_RATINGS[awayTeam] || 70;
   
-  const diff = homeRating - awayRating;
+  // 计算实力差（0-100范围）
+  const ratingDiff = homeRating - awayRating;
   
-  // 逻辑斯蒂函数：将实力差转换为概率
-  const homeWinProb = 50 + diff * 0.8;
-  const awayWinProb = 50 - diff * 0.8;
-  const drawProb = 100 - homeWinProb - awayWinProb;
+  // 使用逻辑斯蒂函数计算主胜概率（-50 到 +50 的 diff 映射到约 5%-95%）
+  const expFactor = Math.exp(-ratingDiff * 0.06); // 约 3 点 rating 差使赔率翻倍
+  const homeWinProb = 100 / (1 + expFactor);
+  const awayWinProb = 100 - homeWinProb;
   
-  // 确保概率在合理范围内
-  const normalizedHome = Math.max(20, Math.min(70, homeWinProb));
-  const normalizedAway = Math.max(20, Math.min(70, awayWinProb));
-  const normalizedDraw = Math.max(10, 100 - normalizedHome - normalizedAway);
+  // 平局概率：根据实力接近程度计算
+  // 实力越接近，平局概率越高；实力差越大，平局概率越低
+  const avgRating = (homeRating + awayRating) / 2;
+  const closenessFactor = 1 - Math.min(Math.abs(ratingDiff) / 50, 1); // 0-1，越接近 1 平局概率越高
+  const baseDrawProb = 20 + closenessFactor * 20; // 20% 到 40% 之间
   
-  // 归一化
-  const total = normalizedHome + normalizedDraw + normalizedAway;
+  // 归一化：主胜 + 客胜 + 平局 = 100%
+  let total = homeWinProb + awayWinProb + baseDrawProb;
+  let homeWin = Math.round((homeWinProb / total) * 100);
+  let awayWin = Math.round((awayWinProb / total) * 100);
+  let draw = 100 - homeWin - awayWin;
   
-  return {
-    homeWin: Math.round((normalizedHome / total) * 100),
-    draw: Math.round((normalizedDraw / total) * 100),
-    awayWin: Math.round((normalizedAway / total) * 100),
-  };
+  // 确保非负
+  homeWin = Math.max(5, homeWin);
+  awayWin = Math.max(5, awayWin);
+  draw = Math.max(0, 100 - homeWin - awayWin);
+  
+  // 最终归一化
+  total = homeWin + draw + awayWin;
+  if (total !== 100) {
+    // 微调最大项
+    if (homeWin >= awayWin && homeWin >= draw) {
+      homeWin = 100 - draw - awayWin;
+    } else if (awayWin >= homeWin && awayWin >= draw) {
+      awayWin = 100 - homeWin - draw;
+    } else {
+      draw = 100 - homeWin - awayWin;
+    }
+  }
+  
+  return { homeWin, draw, awayWin };
 }
 
 /**
  * 根据实时比分和比赛时间调整概率
  */
 function adjustProbabilitiesForLiveMatch(
-  homeScore: number,
-  awayScore: number,
-  elapsed: number,
+  homeScore: number | null,
+  awayScore: number | null,
+  elapsed: number | null,
   homeRating: number,
   awayRating: number
 ): { homeWin: number; draw: number; awayWin: number } {
@@ -90,59 +110,53 @@ function adjustProbabilitiesForLiveMatch(
     Object.keys(TEAM_RATINGS).find(k => TEAM_RATINGS[k] === awayRating) || ''
   );
   
+  // 如果比分是 null，使用基础概率
+  if (homeScore === null || awayScore === null || elapsed === null) {
+    return baseProb;
+  }
+  
   // 根据比分调整
   const scoreDiff = homeScore - awayScore;
+  const mins = elapsed;
   
-  if (elapsed < 45) {
+  if (mins < 45) {
     // 上半场：比分影响较小
     if (scoreDiff > 0) {
       return {
-        homeWin: Math.min(85, baseProb.homeWin + 15),
-        draw: Math.max(10, baseProb.draw - 5),
+        homeWin: Math.min(90, baseProb.homeWin + 15),
+        draw: Math.max(5, baseProb.draw - 5),
         awayWin: Math.max(5, baseProb.awayWin - 10),
       };
     } else if (scoreDiff < 0) {
       return {
         homeWin: Math.max(5, baseProb.homeWin - 10),
-        draw: Math.max(10, baseProb.draw - 5),
-        awayWin: Math.min(85, baseProb.awayWin + 15),
+        draw: Math.max(5, baseProb.draw - 5),
+        awayWin: Math.min(90, baseProb.awayWin + 15),
       };
     }
-  } else if (elapsed < 90) {
+  } else if (mins < 90) {
     // 下半场：比分影响较大
     if (scoreDiff > 0) {
       return {
-        homeWin: Math.min(90, baseProb.homeWin + 25),
-        draw: Math.max(5, baseProb.draw - 10),
+        homeWin: Math.min(95, baseProb.homeWin + 25),
+        draw: Math.max(3, baseProb.draw - 8),
         awayWin: Math.max(2, baseProb.awayWin - 15),
       };
     } else if (scoreDiff < 0) {
       return {
         homeWin: Math.max(2, baseProb.homeWin - 15),
-        draw: Math.max(5, baseProb.draw - 10),
-        awayWin: Math.min(90, baseProb.awayWin + 25),
+        draw: Math.max(3, baseProb.draw - 8),
+        awayWin: Math.min(95, baseProb.awayWin + 25),
       };
     }
   } else {
-    // 补时或结束后：比分影响最大
+    // 补时或结束后：比分即为结果
     if (scoreDiff > 0) {
-      return {
-        homeWin: 100,
-        draw: 0,
-        awayWin: 0,
-      };
+      return { homeWin: 100, draw: 0, awayWin: 0 };
     } else if (scoreDiff < 0) {
-      return {
-        homeWin: 0,
-        draw: 0,
-        awayWin: 100,
-      };
+      return { homeWin: 0, draw: 0, awayWin: 100 };
     } else {
-      return {
-        homeWin: 0,
-        draw: 100,
-        awayWin: 0,
-      };
+      return { homeWin: 0, draw: 100, awayWin: 0 };
     }
   }
   
@@ -160,68 +174,88 @@ function getRiskLevel(probabilities: { homeWin: number; draw: number; awayWin: n
 }
 
 /**
+ * 标准化 API-FOOTBALL 状态
+ */
+function normalizeApiFootballStatus(status: string): 'NOT_STARTED' | 'LIVE' | 'FINISHED' {
+  // LIVE 状态
+  const liveStatuses = ['1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE', 'INT', 'SUSP', 'BREAK'];
+  if (liveStatuses.includes(status)) {
+    return 'LIVE';
+  }
+  
+  // FINISHED 状态
+  const finishedStatuses = ['FT', 'AET', 'PEN', 'AWARDED'];
+  if (finishedStatuses.includes(status)) {
+    return 'FINISHED';
+  }
+  
+  // 其他全部视为未开始（包括 NS, TBD, PST, CANC, ABANDONED, WO 等）
+  return 'NOT_STARTED';
+}
+
+/**
  * 从 API-FOOTBALL 获取数据
  */
-async function fetchFromApiFootball(date: string): Promise<StandardMatch[]> {
+async function fetchFromApiFootball(date: string): Promise<{ matches: StandardMatch[]; error?: string }> {
   const apiKey = process.env.API_FOOTBALL_KEY;
   
   if (!apiKey) {
-    console.warn('API_FOOTBALL_KEY not configured');
-    return [];
+    return { matches: [], error: 'API_FOOTBALL_KEY 环境变量未配置' };
   }
   
   try {
-    const response = await fetch(
-      `https://v3.football.api-sports.io/fixtures?date=${date}`,
-      {
-        headers: {
-          'x-apisports-key': apiKey,
-        },
-      }
-    );
+    // 添加 timezone 参数
+    const url = `https://v3.football.api-sports.io/fixtures?date=${date}&timezone=Asia/Shanghai`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'x-apisports-key': apiKey,
+      },
+    });
     
     if (!response.ok) {
-      throw new Error(`API-FOOTBALL error: ${response.status}`);
+      return { matches: [], error: `API-FOOTBALL 请求失败: HTTP ${response.status}` };
     }
     
     const data = await response.json();
     
-    if (data.errors && data.errors.length > 0) {
-      throw new Error(`API-FOOTBALL errors: ${JSON.stringify(data.errors)}`);
+    // 检查 API 错误
+    if (data.errors && Object.keys(data.errors).length > 0) {
+      const errorMsg = Object.values(data.errors).filter(Boolean).join('; ');
+      return { matches: [], error: `API-FOOTBALL 错误: ${errorMsg}` };
     }
     
-    return (data.response || []).map((fixture: any) => {
+    const fixtures = data.response || [];
+    
+    const matches: StandardMatch[] = fixtures.map((fixture: any) => {
       const homeTeam = fixture.teams.home.name;
       const awayTeam = fixture.teams.away.name;
       const homeScore = fixture.goals.home;
       const awayScore = fixture.goals.away;
-      const status = fixture.fixture.status.short;
-      
-      let matchStatus: 'NOT_STARTED' | 'LIVE' | 'FINISHED' = 'NOT_STARTED';
-      if (status === '1H' || status === '2H' || status === 'LIVE') {
-        matchStatus = 'LIVE';
-      } else if (status === 'FT' || status === 'AET' || status === 'PEN') {
-        matchStatus = 'FINISHED';
-      }
-      
+      const rawStatus = fixture.fixture.status.short;
+      const matchStatus = normalizeApiFootballStatus(rawStatus);
       const elapsed = fixture.fixture.status.elapsed || null;
       
       let probabilities;
       if (matchStatus === 'LIVE') {
         probabilities = adjustProbabilitiesForLiveMatch(
-          homeScore || 0,
-          awayScore || 0,
-          elapsed || 0,
+          homeScore,
+          awayScore,
+          elapsed,
           TEAM_RATINGS[homeTeam] || 70,
           TEAM_RATINGS[awayTeam] || 70
         );
       } else if (matchStatus === 'FINISHED') {
-        if (homeScore > awayScore) {
-          probabilities = { homeWin: 100, draw: 0, awayWin: 0 };
-        } else if (homeScore < awayScore) {
-          probabilities = { homeWin: 0, draw: 0, awayWin: 100 };
+        if (homeScore !== null && awayScore !== null) {
+          if (homeScore > awayScore) {
+            probabilities = { homeWin: 100, draw: 0, awayWin: 0 };
+          } else if (homeScore < awayScore) {
+            probabilities = { homeWin: 0, draw: 0, awayWin: 100 };
+          } else {
+            probabilities = { homeWin: 0, draw: 100, awayWin: 0 };
+          }
         } else {
-          probabilities = { homeWin: 0, draw: 100, awayWin: 0 };
+          probabilities = calculateProbabilities(homeTeam, awayTeam);
         }
       } else {
         probabilities = calculateProbabilities(homeTeam, awayTeam);
@@ -250,21 +284,22 @@ async function fetchFromApiFootball(date: string): Promise<StandardMatch[]> {
         riskLevel: getRiskLevel(probabilities),
       };
     });
-  } catch (error) {
+    
+    return { matches };
+  } catch (error: any) {
     console.error('Error fetching from API-FOOTBALL:', error);
-    return [];
+    return { matches: [], error: `API-FOOTBALL 请求异常: ${error.message}` };
   }
 }
 
 /**
  * 从 football-data.org 获取数据
  */
-async function fetchFromFootballData(date: string): Promise<StandardMatch[]> {
+async function fetchFromFootballData(date: string): Promise<{ matches: StandardMatch[]; error?: string }> {
   const apiKey = process.env.FOOTBALL_DATA_KEY;
   
   if (!apiKey) {
-    console.warn('FOOTBALL_DATA_KEY not configured');
-    return [];
+    return { matches: [], error: 'FOOTBALL_DATA_KEY 环境变量未配置' };
   }
   
   try {
@@ -278,16 +313,16 @@ async function fetchFromFootballData(date: string): Promise<StandardMatch[]> {
     );
     
     if (!response.ok) {
-      throw new Error(`football-data.org error: ${response.status}`);
+      return { matches: [], error: `football-data.org 请求失败: HTTP ${response.status}` };
     }
     
     const data = await response.json();
     
-    return (data.matches || []).map((match: any) => {
+    const matches: StandardMatch[] = (data.matches || []).map((match: any) => {
       const homeTeam = match.homeTeam.name;
       const awayTeam = match.awayTeam.name;
-      const homeScore = match.score.fullTime.home;
-      const awayScore = match.score.fullTime.away;
+      const homeScore = match.score?.fullTime?.home;
+      const awayScore = match.score?.fullTime?.away;
       const status = match.status;
       
       let matchStatus: 'NOT_STARTED' | 'LIVE' | 'FINISHED' = 'NOT_STARTED';
@@ -302,19 +337,23 @@ async function fetchFromFootballData(date: string): Promise<StandardMatch[]> {
       let probabilities;
       if (matchStatus === 'LIVE') {
         probabilities = adjustProbabilitiesForLiveMatch(
-          homeScore || 0,
-          awayScore || 0,
-          elapsed || 0,
+          homeScore,
+          awayScore,
+          elapsed,
           TEAM_RATINGS[homeTeam] || 70,
           TEAM_RATINGS[awayTeam] || 70
         );
       } else if (matchStatus === 'FINISHED') {
-        if (homeScore > awayScore) {
-          probabilities = { homeWin: 100, draw: 0, awayWin: 0 };
-        } else if (homeScore < awayScore) {
-          probabilities = { homeWin: 0, draw: 0, awayWin: 100 };
+        if (homeScore !== null && awayScore !== null) {
+          if (homeScore > awayScore) {
+            probabilities = { homeWin: 100, draw: 0, awayWin: 0 };
+          } else if (homeScore < awayScore) {
+            probabilities = { homeWin: 0, draw: 0, awayWin: 100 };
+          } else {
+            probabilities = { homeWin: 0, draw: 100, awayWin: 0 };
+          }
         } else {
-          probabilities = { homeWin: 0, draw: 100, awayWin: 0 };
+          probabilities = calculateProbabilities(homeTeam, awayTeam);
         }
       } else {
         probabilities = calculateProbabilities(homeTeam, awayTeam);
@@ -343,52 +382,23 @@ async function fetchFromFootballData(date: string): Promise<StandardMatch[]> {
         riskLevel: getRiskLevel(probabilities),
       };
     });
-  } catch (error) {
+    
+    return { matches };
+  } catch (error: any) {
     console.error('Error fetching from football-data.org:', error);
-    return [];
+    return { matches: [], error: `football-data.org 请求异常: ${error.message}` };
   }
 }
 
 /**
- * 生成 mock 数据（用于 fallback）
+ * 设置禁用缓存的响应头
  */
-function generateMockData(date: string): StandardMatch[] {
-  const mockMatches: StandardMatch[] = [
-    {
-      id: 'mock-1',
-      date,
-      time: '18:00',
-      competition: 'FIFA World Cup',
-      stage: 'Group Stage',
-      homeTeam: { name: 'Brazil', flag: '' },
-      awayTeam: { name: 'Argentina', flag: '' },
-      homeScore: null,
-      awayScore: null,
-      status: 'NOT_STARTED',
-      elapsed: null,
-      lastUpdated: new Date().toISOString(),
-      probabilities: calculateProbabilities('Brazil', 'Argentina'),
-      riskLevel: '中风险',
-    },
-    {
-      id: 'mock-2',
-      date,
-      time: '20:00',
-      competition: 'FIFA World Cup',
-      stage: 'Group Stage',
-      homeTeam: { name: 'France', flag: '' },
-      awayTeam: { name: 'Spain', flag: '' },
-      homeScore: null,
-      awayScore: null,
-      status: 'NOT_STARTED',
-      elapsed: null,
-      lastUpdated: new Date().toISOString(),
-      probabilities: calculateProbabilities('France', 'Spain'),
-      riskLevel: '高风险',
-    },
-  ];
-  
-  return mockMatches;
+function setNoCacheHeaders(res: VercelResponse): void {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -419,70 +429,102 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     let matches: StandardMatch[] = [];
     let dataSource = 'none';
-    let error = null;
+    let error: string | null = null;
+    let apiFootballCount = 0;
+    let footballDataCount = 0;
     
     // 根据环境变量选择数据源
     const provider = process.env.LIVE_SCORE_PROVIDER || 'api-football';
     
     if (provider === 'api-football') {
-      matches = await fetchFromApiFootball(date);
-      if (matches.length > 0) {
+      const result = await fetchFromApiFootball(date);
+      if (result.matches.length > 0) {
+        matches = result.matches;
         dataSource = 'api-football';
-      } else {
-        // 尝试备用数据源
-        matches = await fetchFromFootballData(date);
-        if (matches.length > 0) {
+        apiFootballCount = result.matches.length;
+      } else if (result.error) {
+        error = result.error;
+      }
+      
+      // 如果第一个数据源失败，尝试备用数据源
+      if (matches.length === 0 && process.env.FOOTBALL_DATA_KEY) {
+        const backupResult = await fetchFromFootballData(date);
+        if (backupResult.matches.length > 0) {
+          matches = backupResult.matches;
           dataSource = 'football-data';
+          footballDataCount = backupResult.matches.length;
+          error = null; // 备用数据源成功，清除错误
         }
       }
     } else if (provider === 'football-data') {
-      matches = await fetchFromFootballData(date);
-      if (matches.length > 0) {
+      const result = await fetchFromFootballData(date);
+      if (result.matches.length > 0) {
+        matches = result.matches;
         dataSource = 'football-data';
-      } else {
-        // 尝试备用数据源
-        matches = await fetchFromApiFootball(date);
-        if (matches.length > 0) {
+        footballDataCount = result.matches.length;
+      } else if (result.error) {
+        error = result.error;
+      }
+      
+      // 如果第一个数据源失败，尝试备用数据源
+      if (matches.length === 0 && process.env.API_FOOTBALL_KEY) {
+        const backupResult = await fetchFromApiFootball(date);
+        if (backupResult.matches.length > 0) {
+          matches = backupResult.matches;
           dataSource = 'api-football';
+          apiFootballCount = backupResult.matches.length;
+          error = null; // 备用数据源成功，清除错误
         }
       }
     }
     
-    // 如果所有数据源都失败，使用 mock 数据
+    // 如果所有数据源都失败，返回空数据和错误信息
     if (matches.length === 0) {
-      matches = generateMockData(date);
-      dataSource = 'mock';
-      error = 'All data sources failed, using mock data';
+      if (!error) {
+        error = '真实数据源未返回比赛数据，请检查 API Key、接口套餐权限、日期筛选或当天是否有比赛';
+      }
     }
     
-    // 设置缓存头
-    const hasLiveMatches = matches.some(m => m.status === 'LIVE');
+    // 强制禁用缓存（实时数据必须每次请求）
+    setNoCacheHeaders(res);
     
-    if (hasLiveMatches) {
-      // 有进行中比赛：不缓存
-      res.setHeader('Cache-Control', 'no-store');
-    } else {
-      // 无进行中比赛：缓存 60 秒
-      res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate');
-    }
+    // 构建 debug 信息（开发环境更详细）
+    const isDev = process.env.NODE_ENV === 'development';
+    const debug = isDev ? {
+      provider,
+      requestedDate: date,
+      timezone: 'Asia/Shanghai',
+      apiFootballCount,
+      footballDataCount,
+      returnedCount: matches.length,
+      hasApiFootballKey: Boolean(process.env.API_FOOTBALL_KEY),
+      hasFootballDataKey: Boolean(process.env.FOOTBALL_DATA_KEY),
+    } : {
+      provider,
+      requestedDate: date,
+      returnedCount: matches.length,
+      hasApiFootballKey: Boolean(process.env.API_FOOTBALL_KEY),
+      hasFootballDataKey: Boolean(process.env.FOOTBALL_DATA_KEY),
+    };
     
     return res.status(200).json({
       matches,
       dataSource,
       lastUpdated: new Date().toISOString(),
       error,
+      debug,
     });
   } catch (error: any) {
     console.error('API error:', error);
     
-    // 返回 mock 数据作为 fallback
-    const matches = generateMockData(date);
+    // 强制禁用缓存
+    setNoCacheHeaders(res);
     
     return res.status(200).json({
-      matches,
-      dataSource: 'mock',
+      matches: [],
+      dataSource: 'none',
       lastUpdated: new Date().toISOString(),
-      error: error.message || 'Internal server error',
+      error: `实时数据接口异常: ${error.message}`,
     });
   }
 }
